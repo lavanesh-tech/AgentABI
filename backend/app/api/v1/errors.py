@@ -13,7 +13,9 @@ from fastapi.responses import JSONResponse
 from app.domain.exceptions import (
     AgentABIError,
     ConflictError,
+    GraphUnavailable,
     InvalidComponentContent,
+    InvalidDependencyRelationship,
     NotFoundError,
 )
 
@@ -36,6 +38,16 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request, exc: InvalidComponentContent
     ) -> JSONResponse:
         return _error_response(422, str(exc))
+
+    @app.exception_handler(InvalidDependencyRelationship)
+    async def handle_invalid_dependency_relationship(
+        request: Request, exc: InvalidDependencyRelationship
+    ) -> JSONResponse:
+        return _error_response(422, str(exc))
+
+    @app.exception_handler(GraphUnavailable)
+    async def handle_graph_unavailable(request: Request, exc: GraphUnavailable) -> JSONResponse:
+        return _error_response(503, str(exc))
 
     @app.exception_handler(AgentABIError)
     async def handle_generic_domain_error(request: Request, exc: AgentABIError) -> JSONResponse:

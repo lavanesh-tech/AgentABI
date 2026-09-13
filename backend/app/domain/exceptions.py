@@ -69,3 +69,40 @@ class InvalidComponentContent(AgentABIError):
         super().__init__(f"Invalid content for component_type={component_type!r}: {detail}")
         self.component_type = component_type
         self.detail = detail
+
+
+class GraphComponentNotFound(NotFoundError):
+    """Raised when an operation needs a component's graph node (e.g.
+    creating a dependency, blast-radius traversal) but it hasn't been
+    synced from PostgreSQL into Neo4j yet via
+    `DependencyGraphService.sync_component`."""
+
+    def __init__(self, component_id: Any) -> None:
+        super().__init__(f"Component {component_id} has not been synced into the graph yet")
+        self.component_id = component_id
+
+
+class InvalidDependencyRelationship(AgentABIError):
+    """Raised when a requested (source_type, relationship_type, target_type)
+    triple isn't one of the shapes `app/domain/relationship_rules.py`
+    allows — e.g. a Model CALLing a Workflow. Mapped to HTTP 422."""
+
+    def __init__(self, source_type: Any, relationship_type: Any, target_type: Any) -> None:
+        super().__init__(
+            f"{relationship_type!r} from {source_type!r} to {target_type!r} "
+            "is not a valid dependency relationship"
+        )
+        self.source_type = source_type
+        self.relationship_type = relationship_type
+        self.target_type = target_type
+
+
+class GraphUnavailable(AgentABIError):
+    """Raised when Neo4j can't be reached at all (connection refused,
+    auth failure, timeout). Mapped to HTTP 503 — distinct from 4xx errors,
+    since the request itself may well be valid and just needs a retry once
+    the graph database is reachable again."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"Graph database unavailable: {detail}")
+        self.detail = detail
