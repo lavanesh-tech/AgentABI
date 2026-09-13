@@ -146,3 +146,95 @@ class SchemaNormalizationError(AgentABIError):
     def __init__(self, detail: str) -> None:
         super().__init__(f"Cannot normalize schema: {detail}")
         self.detail = detail
+
+
+class TrajectoryNotFound(NotFoundError):
+    def __init__(self, trajectory_id: Any) -> None:
+        super().__init__(f"Trajectory {trajectory_id} not found")
+        self.trajectory_id = trajectory_id
+
+
+class TrajectoryAlreadyExists(ConflictError):
+    """Raised when a `start_trajectory` call's `external_run_id` already
+    identifies a different trajectory *and* the new request's declared
+    identifying fields (workflow version, environment) conflict with the
+    existing one — an exact-duplicate retry instead returns the existing
+    trajectory (see docs/DECISIONS.md). Mapped to HTTP 409."""
+
+    def __init__(self, project_id: Any, external_run_id: str) -> None:
+        super().__init__(
+            f"Trajectory with external_run_id={external_run_id!r} already exists in "
+            f"project {project_id} with conflicting details"
+        )
+        self.project_id = project_id
+        self.external_run_id = external_run_id
+
+
+class TrajectoryTerminal(ConflictError):
+    """Raised when `append_event` targets a trajectory that is no longer
+    RUNNING. Mapped to HTTP 409 — distinct from `InvalidTrajectoryTransition`,
+    which is about the trajectory's own status-transition operations, not
+    event ingestion."""
+
+    def __init__(self, trajectory_id: Any, status: Any) -> None:
+        super().__init__(
+            f"Trajectory {trajectory_id} is {status!r} (terminal); cannot append events"
+        )
+        self.trajectory_id = trajectory_id
+        self.status = status
+
+
+class InvalidTrajectoryTransition(ConflictError):
+    """Raised by `complete_trajectory`/`fail_trajectory` when the
+    trajectory isn't RUNNING — e.g. completing an already-failed
+    trajectory. Mapped to HTTP 409."""
+
+    def __init__(self, trajectory_id: Any, current_status: Any, target_status: Any) -> None:
+        super().__init__(
+            f"Trajectory {trajectory_id} cannot transition from {current_status!r} "
+            f"to {target_status!r}"
+        )
+        self.trajectory_id = trajectory_id
+        self.current_status = current_status
+        self.target_status = target_status
+
+
+class InvalidTrajectoryEvent(AgentABIError):
+    """Raised when an event's shape is structurally nonsensical for its
+    `event_type` (see `app/trajectory/validation.py`), or when a
+    component/component-version reference doesn't resolve within the
+    trajectory's project. Mapped to HTTP 422."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+class DuplicateTrajectoryEvent(ConflictError):
+    """Raised when an `append_event` call reuses an `external_event_id`
+    already recorded on this trajectory with *different* event data (an
+    exact-duplicate retry is instead idempotent — see
+    docs/DECISIONS.md). Mapped to HTTP 409."""
+
+    def __init__(self, trajectory_id: Any, external_event_id: str) -> None:
+        super().__init__(
+            f"external_event_id={external_event_id!r} already recorded on trajectory "
+            f"{trajectory_id} with different event data"
+        )
+        self.trajectory_id = trajectory_id
+        self.external_event_id = external_event_id
+
+
+class TrajectoryPayloadTooLarge(AgentABIError):
+    """Raised when a single event payload field exceeds the hard size
+    ceiling (`app/trajectory/payload_limits.py`) — too large even to
+    store as a truncated representation. Mapped to HTTP 422."""
+
+    def __init__(self, field_name: str, size_bytes: int, limit_bytes: int) -> None:
+        super().__init__(
+            f"Event field {field_name!r} is {size_bytes} bytes, exceeding the "
+            f"{limit_bytes}-byte hard limit"
+        )
+        self.field_name = field_name
+        self.size_bytes = size_bytes
+        self.limit_bytes = limit_bytes

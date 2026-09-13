@@ -17,8 +17,10 @@ from app.domain.exceptions import (
     InvalidCompatibilityComparison,
     InvalidComponentContent,
     InvalidDependencyRelationship,
+    InvalidTrajectoryEvent,
     NotFoundError,
     SchemaNormalizationError,
+    TrajectoryPayloadTooLarge,
     UnsupportedCompatibilityType,
 )
 
@@ -67,6 +69,18 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(SchemaNormalizationError)
     async def handle_schema_normalization_error(
         request: Request, exc: SchemaNormalizationError
+    ) -> JSONResponse:
+        return _error_response(422, str(exc))
+
+    @app.exception_handler(InvalidTrajectoryEvent)
+    async def handle_invalid_trajectory_event(
+        request: Request, exc: InvalidTrajectoryEvent
+    ) -> JSONResponse:
+        return _error_response(422, str(exc))
+
+    @app.exception_handler(TrajectoryPayloadTooLarge)
+    async def handle_trajectory_payload_too_large(
+        request: Request, exc: TrajectoryPayloadTooLarge
     ) -> JSONResponse:
         return _error_response(422, str(exc))
 

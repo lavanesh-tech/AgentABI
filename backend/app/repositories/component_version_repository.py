@@ -22,6 +22,15 @@ class ComponentVersionRepository:
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
+    async def get_by_id(self, version_id: uuid.UUID) -> ComponentVersion | None:
+        """Look up a version by its own primary key, not scoped by
+        component/project — callers (e.g. `TrajectoryRecorderService`)
+        are responsible for verifying the resolved version's
+        `component_id`/project ownership themselves."""
+
+        stmt = select(ComponentVersion).where(ComponentVersion.id == version_id)
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def get_latest(self, component_id: uuid.UUID) -> ComponentVersion | None:
         stmt = (
             select(ComponentVersion)

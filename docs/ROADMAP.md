@@ -10,7 +10,7 @@ every phase.
 | 3 | Component Registry | ✅ Done (see caveat in DECISIONS.md ADR-013) |
 | 4 | Neo4j dependency graph | ✅ Done (see caveat in DECISIONS.md ADR-021) |
 | 5 | Compatibility / schema-diff engine | ✅ Done (see caveat in DECISIONS.md ADR-022) |
-| 6 | Trajectory recording | ⬜ Not started |
+| 6 | Trajectory recording | ✅ Done (see caveat in DECISIONS.md ADR-032) |
 | 7 | Replay engine | ⬜ Not started |
 | 8 | OpenAI provider | ⬜ Not started |
 | 9 | Gemini provider | ⬜ Not started |
@@ -166,3 +166,47 @@ through `pytest` — see DECISIONS.md ADR-022.
 Run `make install && make lint && make typecheck && make test &&
 alembic upgrade head` locally to complete verification before starting
 Phase 6.
+
+## Phase 6 notes
+
+Trajectory Recording: a dataclass/stdlib-only `app/trajectory/` package
+(`models.py`, `transitions.py`, `redaction.py`, `payload_limits.py`,
+`hashing.py`, `validation.py`) plus new `trajectories`/`trajectory_events`
+tables (`0004_trajectories.py`) recording historical agent-execution runs
+as an ordered, append-only sequence of strongly-typed events (an 18-member
+closed `EventType` enum — no free-form event strings anywhere). Sequence
+numbers are allocated via a single atomic conditional `UPDATE` (never
+`max()+1`), events carry an optional exact `component_version_id`
+snapshot reference, redaction and payload-size limits run on every event,
+dual idempotency covers both trajectory-start (`external_run_id`) and
+event-append (`external_event_id` + content hash) retries, and
+`TrajectoryRecorderService` exposes start/append/complete/fail/get/list
+behind thin REST endpoints under
+`/api/v1/projects/{project_id}/trajectories`. This phase deliberately
+does not implement replay (Phase 7), OpenTelemetry (Phase 15), or S3
+payload archival — see DECISIONS.md ADR-026 through ADR-030.
+
+Same PyPI/Docker sandbox restriction as every prior phase, but the
+`app/trajectory/` package has zero SQLAlchemy/Pydantic/FastAPI imports,
+which again made it possible to bypass `tests/conftest.py`
+(`pytest --noconftest`) and run the real, installed `pytest` binary
+directly: **49/49 pure unit tests passed** (`test_trajectory_transitions.py`,
+`test_trajectory_redaction.py` — including the spec's exact
+secret-redaction acceptance case — `test_trajectory_payload_limits.py`,
+`test_trajectory_validation.py`, `test_trajectory_hashing.py`,
+`test_trajectory_models.py`), and combined with Phase 5's 75, **124/124
+passed**, confirming no regression. Migration 0004 was verified by direct
+DDL execution against a real local Postgres 16 (same ADR-008 pattern),
+including the spec's exact 8-event `checkout-run-8291` acceptance
+trajectory, both immutability postures (trigger on `trajectory_events`,
+none on `trajectories`), the sequence/external-run-id unique constraints,
+and cascade delete. While fixing `conftest.py` for this phase's trigger,
+a latent Phase 5 gap was found and fixed — see DECISIONS.md ADR-031.
+`test_trajectory_recorder_service.py` (24 tests, incl. a real
+`asyncio.gather` concurrency test) and `test_trajectories_api.py` (16
+tests) are written and `py_compile`-clean but need SQLAlchemy/FastAPI/
+httpx to actually run through `pytest` — see DECISIONS.md ADR-032.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Phase 7.

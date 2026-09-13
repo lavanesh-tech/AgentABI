@@ -26,11 +26,11 @@ async def client():
         yield ac
 
 
-# Mirrors alembic/versions/0002_component_registry.py's immutability
-# trigger. Base.metadata.create_all() (used only in tests, never for the
-# app's real schema — see docs/ARCHITECTURE.md) creates tables from the
-# ORM but knows nothing about raw-SQL triggers, so tests that need the
-# database-level immutability backstop need it created here too.
+# Mirrors the immutability triggers created by migrations
+# 0002/0003/0004. Base.metadata.create_all() (used only in tests, never
+# for the app's real schema — see docs/ARCHITECTURE.md) creates tables
+# from the ORM but knows nothing about raw-SQL triggers, so any test that
+# needs a database-level immutability backstop needs it created here too.
 _IMMUTABILITY_DDL = """
 CREATE OR REPLACE FUNCTION prevent_component_version_mutation()
 RETURNS trigger AS $$
@@ -49,6 +49,41 @@ CREATE TRIGGER trg_component_versions_immutable
 BEFORE UPDATE ON component_versions
 FOR EACH ROW
 EXECUTE FUNCTION prevent_component_version_mutation();
+
+CREATE OR REPLACE FUNCTION prevent_compatibility_evidence_mutation()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION
+        'compatibility scan evidence is immutable once created (table=%, id=%)',
+        TG_TABLE_NAME, OLD.id;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_compatibility_scans_immutable ON compatibility_scans;
+CREATE TRIGGER trg_compatibility_scans_immutable
+BEFORE UPDATE ON compatibility_scans
+FOR EACH ROW
+EXECUTE FUNCTION prevent_compatibility_evidence_mutation();
+
+DROP TRIGGER IF EXISTS trg_scan_changes_immutable ON scan_changes;
+CREATE TRIGGER trg_scan_changes_immutable
+BEFORE UPDATE ON scan_changes
+FOR EACH ROW
+EXECUTE FUNCTION prevent_compatibility_evidence_mutation();
+
+CREATE OR REPLACE FUNCTION prevent_trajectory_event_mutation()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION
+        'trajectory_events are immutable once created (id=%)', OLD.id;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_trajectory_events_immutable ON trajectory_events;
+CREATE TRIGGER trg_trajectory_events_immutable
+BEFORE UPDATE ON trajectory_events
+FOR EACH ROW
+EXECUTE FUNCTION prevent_trajectory_event_mutation();
 """
 
 
