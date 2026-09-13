@@ -16,6 +16,7 @@ current implementation, `docs/DECISIONS.md` for the ADR log, and
 cp .env.example .env
 make install       # creates backend/.venv and installs deps
 make infra-up       # postgres, redis, neo4j, kafka via docker compose
+make migrate         # alembic upgrade head
 make run             # uvicorn app.main:app --reload
 ```
 
@@ -26,4 +27,5 @@ make typecheck   # mypy
 make test          # pytest
 ```
 
-`GET /api/v1/health` reports process liveness.
+`GET /api/v1/health` reports process liveness. `GET /api/v1/ready` reports
+whether Postgres is actually reachable (503 if not).
