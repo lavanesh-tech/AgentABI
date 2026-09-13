@@ -2,6 +2,226 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-032 — Phase 6 verification: pure trajectory logic ran for real; persistence/API were verified by direct DDL, not through `pytest` (2026-09-13)
+
+**Context:** Same sandbox restriction as every prior phase (ADR-005/006/
+008/013/021/022) — PyPI, apt, and Docker-registry pulls all return 403 in
+this container, so `fastapi`/`sqlalchemy`/`pydantic`/`httpx` cannot be
+installed.
+
+**What ran for real:** `app/trajectory/` has no SQLAlchemy/Pydantic/
+FastAPI import anywhere in its graph, so `pytest --noconftest` (the same
+workaround established in Phase 5) executed the real, already-installed
+`pytest` binary against six pure test files — 49/49 passed, combined with
+Phase 5's 75, 124/124. `ruff format`/`ruff check` clean;
+`python3.12 -m py_compile` clean on every file; `mypy app` fails on the
+same pre-existing `pydantic.mypy` import error as every prior phase.
+
+**What was verified instead, following the ADR-008 pattern:** migration
+0004 applied via raw SQL to a real local Postgres 16 (freshly started
+this session — the container's Postgres does not persist state across
+sessions, so migrations 0001-0004 were re-transcribed and reapplied from
+scratch). Directly exercised: the spec's exact 8-event
+`checkout-run-8291` acceptance trajectory (simulating the app's atomic
+sequence-allocation UPDATE per event) producing the correct 1-8 ordering
+and event types; the `trajectory_events` immutability trigger rejecting
+an `UPDATE`; the `trajectories` row accepting a legitimate `UPDATE` (no
+trigger, by design — ADR-027); the `(trajectory_id, sequence_number)`
+unique constraint rejecting a duplicate; the partial
+`(project_id, external_run_id)` unique index rejecting a same-project
+duplicate while allowing the same id in a different project; and
+`ON DELETE CASCADE` from `projects` removing a trajectory and its events.
+
+**What could not be verified:** `test_trajectory_recorder_service.py` (24
+tests) and `test_trajectories_api.py` (16 tests) are written and
+`py_compile`-clean but need SQLAlchemy/FastAPI/httpx to run through
+`pytest` itself — not exercised this session. Same caveat as ADR-022:
+the raw-SQL verification above exercises the same schema and constraints
+these tests assert against, but not the Python service/API code paths
+themselves.
+
+**Action for the user:** run `make install && make lint && make
+typecheck && make test && alembic upgrade head` locally to complete
+verification.
+
+## ADR-031 — Phase 5 `conftest.py` immutability-trigger gap: found and fixed this session (2026-09-13)
+
+**Context:** While extending `tests/conftest.py`'s `_IMMUTABILITY_DDL`
+fixture for Phase 6's `trajectory_events` trigger, it became clear the
+fixture had never been extended for Phase 5's
+`prevent_compatibility_evidence_mutation()` trigger either. Because
+SQLAlchemy has never been installable in this sandbox in any phase,
+`test_compatibility_service.py`'s two immutability tests
+(`test_scan_row_is_immutable_at_the_database_level`,
+`test_scan_change_row_is_immutable_at_the_database_level`) have never
+actually executed — `Base.metadata.create_all()` creates tables from ORM
+metadata only, not raw-SQL triggers, so those two tests would have
+silently failed the moment they could run, for a reason unrelated to the
+compatibility engine itself.
+
+**Decision:** Fix the fixture now rather than leave a known gap in place.
+`_IMMUTABILITY_DDL` was extended to include all three trigger sets to
+date (Phase 3's `component_versions` trigger, Phase 5's two
+`compatibility_scans`/`scan_changes` triggers, Phase 6's
+`trajectory_events` trigger), each guarded with `DROP TRIGGER IF EXISTS`
+so the fixture stays idempotent across repeated test runs. This is a
+test-infrastructure correction, not a redo of Phase 5's implementation —
+no production code changed, and the fix is purely additive.
+
+**Consequence:** once SQLAlchemy/asyncpg become installable, Phase 5's
+immutability tests will pass for the first time rather than failing on
+an infrastructure gap unrelated to their actual assertions.
+
+## ADR-030 — Redaction and payload-size limits are foundations, not a DLP platform; S3 archival deferred (2026-09-13)
+
+**Context:** The spec explicitly warns against building "a complete DLP
+platform" and against introducing S3 archival in this phase, while still
+requiring practical redaction and payload-size safeguards.
+
+**Decision:** `redaction.sanitize()` matches against a small, fixed,
+documented set of sensitive keys (`password`, `secret`, `token`,
+`api_key`, `authorization`, `access_token`, `refresh_token`),
+case-insensitively and with hyphens normalized to underscores, recursing
+through nested dicts/lists/tuples and replacing matched values with a
+constant placeholder (`"***REDACTED***"`) — deterministic and auditable,
+not a heuristic scanner for arbitrary secret-shaped strings.
+`payload_limits.enforce_payload_limit()` is a two-tier soft/hard byte
+limit (32KB / 1MB, both overridable) using the same canonicalized-JSON
+size measurement as Phase 3's checksum: under the soft limit, store in
+full; between soft and hard, store a deterministic truncated
+representation (`_truncated`, `_original_size_bytes`, a bounded
+`_preview`) instead of the real payload; over the hard limit, reject the
+event outright (`TrajectoryPayloadTooLarge`). Redaction always runs
+before size enforcement.
+
+**What's deliberately deferred:** archiving oversized or historical
+payloads to S3/object storage with a database pointer. Today, a payload
+that would exceed the hard limit is rejected rather than archived
+externally. This is an explicit, documented limitation, not an oversight
+— extending it later means adding an archival backend and a
+`payload_ref`-style column, without changing the redaction/size-check
+call sites that already exist.
+
+## ADR-029 — Dual idempotency: `external_run_id` for trajectory start, `external_event_id` + content hash for event append (2026-09-13)
+
+**Context:** Instrumentation code retries. A trajectory-start call or an
+event-append call might be sent twice — after a network timeout, a
+process restart, or an at-least-once delivery guarantee upstream — and
+must not silently create a duplicate trajectory or a duplicate event.
+
+**Decision:** Two independent idempotency keys, one per operation, both
+using the same "exact match returns existing, conflict rejects
+deterministically" shape. Trajectory start: a partial unique index on
+`(project_id, external_run_id) WHERE external_run_id IS NOT NULL`;
+`start_trajectory()` catches the resulting `IntegrityError`, re-fetches
+the existing row, and compares identifying fields
+(`workflow_component_id`, `workflow_version_id`, `environment`) — an
+exact match returns the existing trajectory, any difference raises
+`TrajectoryAlreadyExists`. Event append: a partial unique index on
+`(trajectory_id, external_event_id) WHERE external_event_id IS NOT
+NULL`; instead of re-comparing raw fields, `append_event()` uses the
+event's own `content_hash` (ADR-028) as the equality check — an
+exact-hash retry returns the existing event with **no new row and no
+sequence number consumed**; a hash mismatch (same id, different data)
+raises `DuplicateTrajectoryEvent`. Reusing the hash avoids inventing a
+second, potentially inconsistent notion of "same event."
+
+**Consequence:** retried instrumentation calls are safe by construction;
+callers that need idempotency simply supply a stable `external_run_id`/
+`external_event_id`, and callers that don't care can omit them entirely
+(both columns are nullable, both indexes are partial).
+
+## ADR-028 — Event integrity hash: SHA-256 over replay-relevant fields only, reusing Phase 3's canonicalization (2026-09-13)
+
+**Context:** The spec asks for a deterministic integrity hash "if it
+doesn't materially complicate Phase 6," and separately needs *some*
+mechanism to distinguish an exact-duplicate event retry from a
+conflicting reuse of the same `external_event_id`.
+
+**Decision:** `hashing.compute_event_hash()` builds a single dict from
+exactly the fields that matter for replay and evidentiary integrity —
+`trajectory_id`, `sequence_number`, `event_type`, `component_version_id`,
+and the (already redacted and size-limited) `input`/`output`/`error`
+payloads — and reuses Phase 3's `canonicalize_content()` (sorted keys,
+compact separators) plus SHA-256, rather than inventing new hashing
+logic. The hash is computed once at append time and stored on the event
+row; it doubles as the comparison mechanism for `external_event_id`
+idempotency (ADR-029), so no second hashing scheme was needed.
+
+**Scope decision:** the hash deliberately excludes `recorded_at`
+(ingestion time, not semantically meaningful for replay) and metadata
+fields that don't affect what happened — only what a replay engine would
+actually need to reproduce or verify is covered.
+
+## ADR-027 — `trajectories` has no immutability trigger; `trajectory_events` does (2026-09-13)
+
+**Context:** Phase 3 (`component_versions`, ADR-011) and Phase 5
+(`compatibility_scans`/`scan_changes`, ADR-024) both used unconditional
+`BEFORE UPDATE` triggers to enforce immutability at the database level.
+Phase 6 has two tables and they are not symmetric: a trajectory event
+never changes once recorded, but a trajectory's `status`, `completed_at`,
+`error`, and `next_sequence` are expected to change over its `RUNNING`
+lifetime.
+
+**Decision:** `trajectory_events` gets the same unconditional
+`prevent_trajectory_event_mutation()` trigger shape as Phase 5's
+evidence tables — any `UPDATE` is rejected outright. `trajectories` gets
+**no trigger at all**, mirroring Phase 3's `components` identity table
+(mutable) rather than `component_versions` (immutable): the row's
+lifecycle-relevant columns are genuinely expected to mutate, and trying
+to allow-list "these four columns may change, nothing else" at the
+trigger level would just reimplement the service layer's own status
+machine in PL/pgSQL. Instead, the service layer is the sole place that
+can `UPDATE` a `Trajectory` row (`allocate_sequence()`,
+`transition_status()`), and both do so via narrow, atomic, conditional
+statements — never a general-purpose update path.
+
+**Consequence:** the append-only guarantee that actually matters for
+audit/replay (event history) is enforced at the strongest layer
+(database trigger, cannot be bypassed by any code path), while the
+mutable-by-design row (trajectory status) is governed by service-layer
+discipline, consistent with how Phase 3 already treats its own
+mutable-vs-immutable table pair.
+
+## ADR-026 — Concurrency-safe sequence allocation: one atomic conditional `UPDATE`, not `SELECT max()+1` (2026-09-13)
+
+**Context:** The spec is explicit that ordering must rely on a
+trajectory-local monotonic `sequence_number`, not timestamps, and that
+two concurrent appenders must never receive the same sequence number or
+silently corrupt ordering. It calls out "`read max(sequence) + 1` without
+synchronization" by name as the anti-pattern to avoid.
+
+**Decision:** Each trajectory row carries its own `next_sequence`
+counter. `TrajectoryRepository.allocate_sequence()` issues a single
+statement:
+
+```sql
+UPDATE trajectories
+   SET next_sequence = next_sequence + 1
+ WHERE id = :id AND status = 'running'
+RETURNING next_sequence;
+```
+
+Postgres takes a row-level lock for the duration of an `UPDATE`, so
+concurrent callers targeting the same trajectory are serialized by the
+database itself — there is no read-then-write window for two callers to
+observe the same value. Folding `WHERE status = 'running'` into the same
+statement closes a second race: a trajectory that transitions to
+`COMPLETED`/`FAILED` between an appender's "is this trajectory still
+running" check and its sequence allocation cannot silently receive a
+post-terminal event, because the conditional `UPDATE` simply matches zero
+rows (`allocate_sequence()` returns `None`, and the service raises
+`TrajectoryTerminal`) instead of two separate statements racing each
+other.
+
+**Verified:** a real `asyncio.gather` test
+(`test_concurrent_appends_allocate_distinct_sequence_numbers`) drives 8
+independent `AsyncSession`/`TrajectoryRecorderService` instances against
+the same trajectory concurrently and asserts the resulting sequence
+numbers are exactly `{1..8}` with no duplicates; the same guarantee was
+also exercised directly against real Postgres via raw SQL this session
+(see ADR-032).
+
 ## ADR-025 — Generic `diff_mapping()` fallback for component types Phase 3 didn't fully structure (2026-09-13)
 
 **Context:** The Phase 5 spec asks for Workflow (steps/ordering), Policy

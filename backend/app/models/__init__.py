@@ -12,6 +12,8 @@ from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember, OrganizationRole
 from app.models.project import Project
 from app.models.scan_change import ScanChange
+from app.models.trajectory import Trajectory
+from app.models.trajectory_event import TrajectoryEvent
 from app.models.user import User
 
 __all__ = [
@@ -24,5 +26,7 @@ __all__ = [
     "OrganizationRole",
     "Project",
     "ScanChange",
+    "Trajectory",
+    "TrajectoryEvent",
     "User",
 ]

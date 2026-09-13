@@ -514,3 +514,194 @@ behaved as expected. `test_compatibility_service.py` and
 not be executed through `pytest` itself this session (need SQLAlchemy/
 FastAPI/httpx, unavailable — same restriction as every prior phase). See
 ADR-022 for the full account.
+
+## Phase 6: Trajectory Recording
+
+```
+backend/
+  app/
+    trajectory/
+      models.py               # EventType (18-member StrEnum), TrajectoryStatus,
+                               # payload dataclasses: ModelRequestPayload,
+                               # ModelResponsePayload, ToolCallPayload,
+                               # ToolResponsePayload, StatePayload
+      transitions.py           # is_valid_transition()/is_terminal() — the one place
+                               # RUNNING→COMPLETED/FAILED rules live
+      redaction.py              # sanitize() — recursive, deterministic secret redaction
+      payload_limits.py         # enforce_payload_limit() — soft-limit truncation,
+                                 # hard-limit rejection (TrajectoryPayloadTooLarge)
+      hashing.py                 # compute_event_hash() — reuses Phase 3's
+                                  # canonicalize_content() + SHA-256
+      validation.py               # validate_event_shape() — reserved event types,
+                                   # required-field rules per EventType
+    models/
+      trajectory.py            # Trajectory ORM model (mutable status/next_sequence)
+      trajectory_event.py       # TrajectoryEvent ORM model (append-only evidence)
+    repositories/
+      trajectory_repository.py # add()/add_event(), atomic allocate_sequence(),
+                                # atomic transition_status(), ordered list_events()
+    services/
+      trajectory_recorder.py   # TrajectoryRecorderService — start/append/complete/
+                                # fail/get/list, component-version validation,
+                                # redaction + size-limit + idempotency orchestration
+    api/v1/
+      trajectories.py          # start, append event, complete, fail, get, list
+                                # trajectory, list ordered events
+      errors.py                 # + InvalidTrajectoryEvent, TrajectoryPayloadTooLarge
+  alembic/versions/
+    0004_trajectories.py      # trajectories, trajectory_events, 2 new enums,
+                               # partial unique indexes (external_run_id,
+                               # external_event_id), prevent_trajectory_event_mutation()
+                               # trigger (trajectory_events only)
+  tests/
+    test_trajectory_transitions.py       # pure unit tests
+    test_trajectory_redaction.py          # pure unit tests (incl. spec's secret case)
+    test_trajectory_payload_limits.py      # pure unit tests
+    test_trajectory_validation.py           # pure unit tests
+    test_trajectory_hashing.py               # pure unit tests
+    test_trajectory_models.py                 # pure unit tests
+    test_trajectory_recorder_service.py        # real-Postgres integration tests
+    test_trajectories_api.py                    # real-Postgres + HTTP integration tests
+```
+
+### Trajectory recording is evidence capture, not summarization
+
+Nothing in `app/trajectory/` calls a model or produces a natural-language
+description of a run. A trajectory is a strongly-typed, ordered sequence
+of `TrajectoryEvent` rows — the raw material Phase 7's replay engine will
+consume. `EventType` is a closed 18-member enum precisely so that no part
+of the system ever has to pattern-match a free-form string to know what
+kind of thing happened.
+
+### Sequence allocation: one atomic UPDATE, never `max()+1`
+
+`TrajectoryRepository.allocate_sequence()` issues a single statement:
+
+```sql
+UPDATE trajectories
+   SET next_sequence = next_sequence + 1
+ WHERE id = :id AND status = 'running'
+RETURNING next_sequence;
+```
+
+Postgres serializes concurrent `UPDATE`s to the same row, so two
+concurrent appenders can never receive the same sequence number — the
+classic "`SELECT max(sequence)+1` then `INSERT`" race (two readers see the
+same max, both insert `+1`, one either collides or silently overwrites
+ordering) is structurally impossible here. Folding `WHERE status =
+'running'` into the *same* statement also closes the TOCTOU race between
+"check the trajectory is still running" and "allocate a sequence number"
+— a trajectory that completes or fails between those two steps in another
+request simply fails to allocate (`allocate_sequence()` returns `None`),
+rather than silently accepting a post-terminal event. See ADR-026.
+
+### Two different immutability postures, on purpose
+
+`trajectory_events` gets an unconditional `BEFORE UPDATE` trigger
+(`prevent_trajectory_event_mutation()`, same shape as Phase 5's
+`prevent_compatibility_evidence_mutation()`): once recorded, historical
+evidence never changes. `trajectories` gets **no** trigger at all — its
+`status`, `completed_at`, `error`, and `next_sequence` columns are
+expected to mutate over the row's `RUNNING` lifetime, exactly the way
+Phase 3's `components` identity table (mutable) differs from
+`component_versions` (immutable, ADR-011). The service layer, not the
+database, is what keeps `Trajectory` mutation narrow — only
+`transition_status()` and `allocate_sequence()` ever `UPDATE` the row.
+See ADR-027.
+
+### Component-version snapshot linkage
+
+A `TrajectoryEvent` may reference `component_version_id` (the exact
+immutable version active when the event occurred), not just a mutable
+`component_id`. `TrajectoryRecorderService._resolve_component_reference()`
+validates that a given version actually belongs to the resolved
+component and to the trajectory's own project before the event is ever
+persisted — cross-project version references are rejected the same way
+Phase 3/5 reject cross-project component references.
+
+### Dual idempotency, one comparison mechanism
+
+Trajectory-start idempotency keys on `(project_id, external_run_id)` (a
+partial unique index, `WHERE external_run_id IS NOT NULL`): an exact
+retry (same `external_run_id`, same identifying fields) returns the
+existing trajectory; a retry with the same id but different data raises
+`TrajectoryAlreadyExists`. Event-append idempotency keys on
+`(trajectory_id, external_event_id)` the same way, but uses the event's
+own `content_hash` (ADR-028) as the "is this really the same event"
+comparator instead of a second bespoke comparison — an exact-hash retry
+returns the existing event with no new row and no sequence consumed; a
+hash mismatch raises `DuplicateTrajectoryEvent`. See ADR-029.
+
+### Redaction and payload-size limits are foundations, not a DLP platform
+
+`redaction.sanitize()` recurses through dicts/lists/tuples, redacting any
+key that case/hyphen-insensitively matches a small fixed set
+(`password`, `secret`, `token`, `api_key`, `authorization`,
+`access_token`, `refresh_token`) — deterministic, not a general secret
+scanner. `payload_limits.enforce_payload_limit()` is a two-tier
+soft/hard limit: under 32KB, stored in full; between 32KB and 1MB,
+replaced with a deterministic truncated representation (`_truncated`,
+`_original_size_bytes`, `_preview`); over 1MB, rejected outright
+(`TrajectoryPayloadTooLarge`). Redaction always runs before size
+enforcement, so a payload can never be rejected or truncated because of
+bytes that get redacted away anyway. Archival of oversized payloads to
+S3/object storage is explicitly out of scope for this phase — see
+ADR-030.
+
+### Why this shape
+
+- **Dataclasses, not Pydantic, for `app/trajectory/`** — mirrors Phase
+  5's `app/compatibility/` choice: zero SQLAlchemy/Pydantic/FastAPI
+  imports in the pure-logic package keeps it testable through the real,
+  installed `pytest` binary via `--noconftest`, independent of which
+  dependencies happen to be installable in a given environment.
+- **`RUN_COMPLETED`/`RUN_FAILED` reserved, not accepted via
+  `append_event()`** — trajectory completion/failure is a status
+  transition with its own invariants (terminal-state enforcement,
+  `completed_at` stamping), not just another row; routing it through the
+  dedicated `complete_trajectory()`/`fail_trajectory()` methods keeps
+  that invariant in one place instead of duplicated between "generic
+  event append" and "status change."
+- **No update/delete on `TrajectoryEvent`, anywhere in the service** —
+  the append-only contract is enforced twice: once by never writing the
+  code path, once by the database trigger, for the same defense-in-depth
+  reason Phase 3 validates versions immutable at both layers (ADR-011).
+
+### Verification in this session
+
+The entire `app/trajectory/` package is dataclass/stdlib-only, so it ran
+through the real, already-installed standalone `pytest` binary via
+`pytest --noconftest`: **49/49 pure unit tests passed**
+(`test_trajectory_transitions.py`, `test_trajectory_redaction.py` —
+including the spec's exact secret-redaction acceptance case —
+`test_trajectory_payload_limits.py`, `test_trajectory_validation.py`,
+`test_trajectory_hashing.py`, `test_trajectory_models.py`); combined with
+Phase 5's 75 pure tests, **124/124 passed**, confirming no regression.
+`ruff format` / `ruff check` are clean and `python3.12 -m py_compile`
+succeeds on every new/changed file; `mypy` fails on the same
+pre-existing `pydantic.mypy` plugin-import error as every prior phase
+(not a new regression).
+
+Migration 0004 was verified by direct DDL execution against a real local
+Postgres 16 (same ADR-008 pattern), including a full run of the spec's
+exact 8-event `checkout-run-8291` acceptance case (correct 1-8 ordering
+and event types), the `trajectory_events` immutability trigger rejecting
+an `UPDATE`, the `trajectories` row accepting a legitimate status
+`UPDATE` (no trigger), the `(trajectory_id, sequence_number)` unique
+constraint rejecting a duplicate, the partial `(project_id,
+external_run_id)` unique index rejecting a same-project duplicate while
+allowing the same id in a different project, and `ON DELETE CASCADE`
+from `projects` removing a trajectory's events. While fixing the
+`conftest.py` fixture for this phase's trigger, a latent gap from Phase 5
+was found and fixed: `_IMMUTABILITY_DDL` had never been extended for
+`prevent_compatibility_evidence_mutation()`, so Phase 5's two immutability
+tests would have silently failed had SQLAlchemy ever been installable to
+run them — see ADR-031.
+
+`test_trajectory_recorder_service.py` (24 tests, incl. a real
+`asyncio.gather` concurrent-append test asserting distinct sequence
+numbers, and the generic-engine acceptance case) and
+`test_trajectories_api.py` (16 tests) are written and `py_compile`-clean
+but could not be executed through `pytest` itself this session (need
+SQLAlchemy/FastAPI/httpx, unavailable — same restriction as every prior
+phase). See ADR-032 for the full account.
