@@ -14,9 +14,12 @@ from app.domain.exceptions import (
     AgentABIError,
     ConflictError,
     GraphUnavailable,
+    InvalidCompatibilityComparison,
     InvalidComponentContent,
     InvalidDependencyRelationship,
     NotFoundError,
+    SchemaNormalizationError,
+    UnsupportedCompatibilityType,
 )
 
 
@@ -48,6 +51,24 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(GraphUnavailable)
     async def handle_graph_unavailable(request: Request, exc: GraphUnavailable) -> JSONResponse:
         return _error_response(503, str(exc))
+
+    @app.exception_handler(InvalidCompatibilityComparison)
+    async def handle_invalid_compatibility_comparison(
+        request: Request, exc: InvalidCompatibilityComparison
+    ) -> JSONResponse:
+        return _error_response(422, str(exc))
+
+    @app.exception_handler(UnsupportedCompatibilityType)
+    async def handle_unsupported_compatibility_type(
+        request: Request, exc: UnsupportedCompatibilityType
+    ) -> JSONResponse:
+        return _error_response(422, str(exc))
+
+    @app.exception_handler(SchemaNormalizationError)
+    async def handle_schema_normalization_error(
+        request: Request, exc: SchemaNormalizationError
+    ) -> JSONResponse:
+        return _error_response(422, str(exc))
 
     @app.exception_handler(AgentABIError)
     async def handle_generic_domain_error(request: Request, exc: AgentABIError) -> JSONResponse:

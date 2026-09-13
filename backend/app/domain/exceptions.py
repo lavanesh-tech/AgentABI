@@ -106,3 +106,43 @@ class GraphUnavailable(AgentABIError):
     def __init__(self, detail: str) -> None:
         super().__init__(f"Graph database unavailable: {detail}")
         self.detail = detail
+
+
+class CompatibilityScanNotFound(NotFoundError):
+    def __init__(self, scan_id: Any) -> None:
+        super().__init__(f"Compatibility scan {scan_id} not found")
+        self.scan_id = scan_id
+
+
+class InvalidCompatibilityComparison(AgentABIError):
+    """Raised when a requested baseline/candidate comparison doesn't make
+    sense — e.g. the two versions belong to different components (the
+    "same-component rule": Phase 5 §19). Mapped to HTTP 422."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"Invalid compatibility comparison: {detail}")
+        self.detail = detail
+
+
+class UnsupportedCompatibilityType(AgentABIError):
+    """Raised when `component_type` has no deterministic comparison
+    defined yet (currently: `PROVIDER` — see docs/DECISIONS.md). Mapped to
+    HTTP 422, distinct from `InvalidCompatibilityComparison`: the request
+    itself is well-formed, this component type just isn't supported yet."""
+
+    def __init__(self, component_type: Any) -> None:
+        super().__init__(
+            f"No compatibility comparison defined for component_type={component_type!r}"
+        )
+        self.component_type = component_type
+
+
+class SchemaNormalizationError(AgentABIError):
+    """Raised when a stored schema payload is too malformed to normalize/
+    diff deterministically (e.g. a non-dict, non-boolean schema node).
+    Mapped to HTTP 422 — this is a data-quality problem with the stored
+    content, not a server error."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"Cannot normalize schema: {detail}")
+        self.detail = detail
