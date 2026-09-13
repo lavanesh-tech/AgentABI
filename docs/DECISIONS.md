@@ -2,6 +2,45 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-008 — Verify migrations by direct DDL execution, not `alembic upgrade` (2026-09-13)
+
+**Context:** Same sandbox network restriction as ADR-005/ADR-006 — the
+`alembic` package itself cannot be installed here, so `alembic upgrade
+head` cannot be run in this session.
+
+**Decision:** Hand-transcribed the initial migration's `upgrade()` into raw
+SQL and ran it directly against a real local Postgres 16 (`agentabi_test`),
+then exercised every constraint by hand (duplicate slug, duplicate
+`(organization_id, slug)`, duplicate membership, cascade delete on
+organization removal) before dropping the schema again. This proves the
+DDL and constraints are correct Postgres, even though the Alembic tool
+itself wasn't exercised.
+
+**Why not skip verification entirely:** The project's rule against fake
+functionality — "prove what can reasonably be proven" — is more strongly
+served by real-but-partial DB verification than by no DB verification at
+all.
+
+**Residual risk:** A typo that makes the *hand-transcribed* SQL diverge
+from what `op.create_table(...)` would actually emit would not be caught
+by this method. Running `alembic upgrade head` for real (see ROADMAP.md)
+is still required before Phase 2 is fully trusted.
+
+## ADR-007 — organization_members as an explicit join table with a role column (2026-09-13)
+
+**Decision:** Model the user↔organization relationship as its own mapped
+entity (`OrganizationMember`: `organization_id`, `user_id`, `role`), not a
+plain SQLAlchemy `secondary=` many-to-many table.
+
+**Why:** The association already needs an attribute (`role`) beyond the
+two foreign keys, and later phases (RBAC, audit events referencing "who
+did this in which org") will want to reference a membership row directly.
+A `secondary=` table can't carry extra columns or be referenced by ID.
+
+**Alternative considered:** Put a single `role`/`organization_id` directly
+on `User` — rejected because it silently assumes a user belongs to exactly
+one organization, which contradicts the spec's multi-tenant model.
+
 ## ADR-001 — Kafka in KRaft mode, no Zookeeper (2026-09-13)
 
 **Decision:** Use `bitnami/kafka` in KRaft (combined broker+controller) mode
@@ -49,6 +88,26 @@ loaded from environment/`.env`, cached via `lru_cache`-wrapped
 
 **Why:** Single source of truth, type-validated at startup (fails fast on
 bad config), easy to override in tests.
+
+## ADR-006 — Phase 2 network/Docker verification gap persists (2026-09-13)
+
+**Context:** Same sandbox restriction as ADR-005, re-confirmed for Phase 2:
+`pypi.org`/`files.pythonhosted.org` return `403 host_not_allowed`,
+`archive.ubuntu.com` (tried as a fallback for `python3-asyncpg`/
+`python3-alembic`/a newer `python3-sqlalchemy`) also returns 403 on every
+package fetch, no local wheel cache has the needed packages, and no Docker
+daemon is running.
+
+**What was different this phase:** PostgreSQL 16 is installed as a system
+package in this sandbox (unlike the other infra services). It was started
+locally (`service postgresql start`) with an `agentabi`/`agentabi_test`
+database, making real Postgres available for verification even though the
+Python driver stack (SQLAlchemy/asyncpg/Alembic) could not be installed —
+see ADR-008 for how that was used.
+
+**Action for the user:** same as ADR-005 — run `make install && make lint
+&& make typecheck && make test` in an environment with normal PyPI/Docker
+access before treating Phase 2 as fully proven.
 
 ## ADR-005 — Phase 1 network/Docker verification gap (2026-09-13)
 
