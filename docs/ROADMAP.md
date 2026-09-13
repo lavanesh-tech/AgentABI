@@ -9,7 +9,7 @@ every phase.
 | 2 | PostgreSQL + SQLAlchemy + Alembic | ✅ Done (see caveat in DECISIONS.md ADR-006/ADR-008) |
 | 3 | Component Registry | ✅ Done (see caveat in DECISIONS.md ADR-013) |
 | 4 | Neo4j dependency graph | ✅ Done (see caveat in DECISIONS.md ADR-021) |
-| 5 | Compatibility / schema-diff engine | ⬜ Not started |
+| 5 | Compatibility / schema-diff engine | ✅ Done (see caveat in DECISIONS.md ADR-022) |
 | 6 | Trajectory recording | ⬜ Not started |
 | 7 | Replay engine | ⬜ Not started |
 | 8 | OpenAI provider | ⬜ Not started |
@@ -129,3 +129,40 @@ Run `make install && make lint && make typecheck && make test` and
 `docker compose -f docker-compose.yml up -d neo4j && pytest
 tests/test_graph_repository.py -v` locally to complete verification
 before starting Phase 5.
+
+## Phase 5 notes
+
+Deterministic Compatibility/Schema-Diff Engine: a pure, stdlib-only
+`app/compatibility/` package (`models.py`, `schema_normalizer.py`,
+`rules.py`, `diff.py`, `analyzer.py`) with no LLM in the decision path,
+comparing a baseline and candidate `component_version` and reporting
+structured `Change`s with an explicit directional (`INPUT`/`OUTPUT`/
+`NEUTRAL`) classification and severity, dispatched per `ComponentType`
+(Schema/Tool/MCP-server get full structural JSON-Schema diffing;
+Prompt/Model/Agent get targeted field comparisons; Workflow/Policy/API
+fall back to a generic config-diff; `PROVIDER` is explicitly
+unsupported). New `compatibility_scans`/`scan_changes` tables
+(`0003_compatibility_scans.py`) with an unconditional immutability
+trigger, a `CompatibilityService` that always creates a new historical
+scan row per run and enforces the same-component rule twice, and REST
+endpoints under `/api/v1/projects/{project_id}/compatibility/scans`.
+
+Same PyPI/Docker sandbox restriction as every prior phase, but this
+phase's core engine is plain-dataclass Python with zero SQLAlchemy/
+Pydantic/FastAPI imports, which made it possible to bypass
+`tests/conftest.py` (`pytest --noconftest`) and run the real, installed
+`pytest` binary directly: **75/75 pure unit tests passed**
+(`test_schema_normalizer.py`, `test_rules.py`, `test_diff.py`,
+`test_analyzer.py`), including the spec's exact acceptance-case example
+(`authorize_payment(customer_id, amount, currency)` →
+`authorize_payment(user_id, amount)`) run through the generic engine, not
+hardcoded. Migration 0003 was verified by direct DDL execution against a
+real local Postgres 16 (same ADR-008 pattern), including both
+immutability triggers and cascade delete. `test_compatibility_service.py`
+(15 tests) and `test_compatibility_api.py` (11 tests) are written and
+`py_compile`-clean but need SQLAlchemy/FastAPI/httpx to actually run
+through `pytest` — see DECISIONS.md ADR-022.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Phase 6.

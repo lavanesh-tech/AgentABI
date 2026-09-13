@@ -2,6 +2,160 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-025 — Generic `diff_mapping()` fallback for component types Phase 3 didn't fully structure (2026-09-13)
+
+**Context:** The Phase 5 spec asks for Workflow (steps/ordering), Policy
+(rule/capability changes), MCP-server, and API comparison, but Phase 3's
+`app/domain/component_content.py` models `WorkflowContent.definition` and
+`PolicyContent.rules` as unstructured `dict`s, and `MCPServerContent`/
+`APIContent` carry no schema field at all. Inventing structure the
+registry doesn't actually have would be dishonest determinism — it would
+look like real analysis of a contract that isn't there.
+
+**Decision:** `app/compatibility/diff.py`'s `diff_mapping()` is a single,
+generic, non-directional recursive dict differ (config field
+added/removed/changed), reused by five of `analyzer.py`'s per-type
+functions as their fallback path. For Workflow specifically,
+`_diff_agent_tools`-style convention detection is attempted first — *if*
+`definition` looks like `{"steps": [{"id"|"name", "required", ...}]}`,
+step add/remove/reorder/required-removal is reported with real
+`ChangeType`s; otherwise it falls back to `diff_mapping()` on the whole
+`definition`. Policy, MCP-server config fields, and API's `auth`/`base_url`
+go straight to `diff_mapping()`. This is a deliberate, documented scope
+decision tied to what Phase 3 actually modeled, not a shortcut avoiding
+real diffing — extending it just means giving these `ComponentType`s
+richer `*Content` models later, at which point the same `diff_schemas()`
+machinery already handles them for free.
+
+## ADR-024 — Compatibility scan persistence: plain-VARCHAR `change_type`, unconditional immutability trigger, always-new-scan idempotency, same-component rule enforced twice (2026-09-13)
+
+**`change_type` as `String(100)`, not a native Postgres enum:** unlike
+`classification`/`severity`/`status`, which are small closed 3/5/3-member
+sets, `ChangeType` already has ~40 members and is exactly the kind of
+thing later phases (behavioral differential analysis, new schema-diff
+rules) will keep extending. A native enum requires an `ALTER TYPE ... ADD
+VALUE` migration per new member; a plain indexed `VARCHAR` makes adding a
+change type a Python-only change to `app/compatibility/models.py`.
+
+**Immutability trigger is unconditional, not column-scoped:** Phase 3's
+`prevent_component_version_mutation()` (ADR-011) only blocks
+`content`/`checksum` changes, deliberately allowing `metadata` updates.
+Phase 5's `prevent_compatibility_evidence_mutation()` rejects *any* UPDATE
+on `compatibility_scans`/`scan_changes` unconditionally, because — unlike
+a component version, which has one genuinely mutable field — no column on
+either compatibility table has a legitimate reason to change after the
+scan completes; the whole row is the evidence.
+
+**Idempotency: `run_scan` always creates a new historical row.** Two
+`run_scan(project, component, "1", "2")` calls produce two distinct
+`CompatibilityScan` rows, never a dedup/reuse of an existing one (proved
+by `test_repeated_scans_create_separate_historical_rows`). Chosen
+deliberately, not left as an accidental side effect of the lack of a
+uniqueness constraint: a scan is an audit record of "this comparison ran
+at this time," and later phases (replay evidence, release-risk decisions,
+GitHub check-runs) need to attach to *the specific run that gated a
+specific deployment*, not to "the latest scan of this pair." Re-running
+is cheap (pure computation, no external calls) so there's no cost to
+always recording history.
+
+**Same-component rule enforced both structurally and defensively:** the
+public `run_scan(project_id, component_id, baseline_version,
+candidate_version)` signature takes one `component_id` for both version
+lookups, so comparing two different components is unreachable through the
+real API by construction. `_scan_from_versions` *additionally* asserts
+`baseline.component_id == candidate.component_id` at runtime and raises
+`InvalidCompatibilityComparison` if it ever isn't — independently
+unit-tested by calling that private method directly with mismatched
+components (`test_scan_from_versions_rejects_unrelated_components`). Two
+enforcement layers because "structurally unreachable today" and "will
+always stay unreachable as this code evolves" are different guarantees.
+
+## ADR-023 — Directional compatibility classification, and reserving `CRITICAL` for one specific case (2026-09-13)
+
+**Context:** The same structural change (e.g. "field removed") means
+different things depending on whether the schema is something callers
+send (input/request) or something callers receive (output/response).
+
+**Decision:** `Direction` (`INPUT`/`OUTPUT`/`NEUTRAL`) is an explicit
+parameter threaded through `diff_schemas()`/`classify()`, never inferred
+from field names or component type. `analyzer.py` passes `INPUT` for a
+tool/API's `input_schema`, `OUTPUT` for `output_schema`, and `NEUTRAL` for
+a standalone `SCHEMA` component whose usage isn't known. The rules table
+(`app/compatibility/rules.py`) encodes the asymmetry directly: adding a
+required input field is breaking (new callers must supply it — existing
+callers can't), removing a required input field is compatible (existing
+callers already satisfy the stricter old contract); the reverse holds for
+output — removing an output field is breaking (existing consumers may
+read it), adding one is compatible. `NEUTRAL` is defined to never be more
+lenient than the stricter of `INPUT`/`OUTPUT` for the same change type
+(tested directly: `test_neutral_direction_is_never_more_lenient_than_
+either_known_direction`), since with no known direction the safe
+assumption is the more conservative one.
+
+**`Severity.CRITICAL` is reserved for exactly one case:**
+`(REQUIRED_FIELD_ADDED, Direction.INPUT)`. Every other breaking change is
+at most `HIGH`. This is the one case the engine can assert with
+*certainty*, not likelihood — any existing caller not already sending the
+new required field is guaranteed to fail schema validation. Every other
+breaking classification (type changes, enum narrowing, output field
+removal) depends on how a specific consumer actually uses the data, which
+Phase 5 explicitly cannot determine (that's replay/behavioral-diff work,
+Phases 7/10) — so those stay `HIGH` rather than being inflated to
+`CRITICAL`.
+
+## ADR-022 — Phase 5 verification: the deterministic engine ran for real; persistence was verified by direct DDL, not through `pytest` (2026-09-13)
+
+**Context:** Same sandbox restriction as every prior phase (ADR-005/006/
+008/013/021) — `fastapi`/`sqlalchemy`/`pydantic`/`httpx`/`alembic` cannot
+be installed here (PyPI returns 403), so the project's own `pytest` suite
+cannot run end-to-end.
+
+**What is materially better this phase:** the entire compatibility engine
+(`app/compatibility/{models,schema_normalizer,rules,diff,analyzer}.py`) is
+plain-dataclass, stdlib-only Python — no SQLAlchemy/Pydantic/FastAPI
+import anywhere in that package. That made it possible to bypass
+`tests/conftest.py` (which imports `httpx` at collection time) with
+`pytest --noconftest` and run the real, installed standalone `pytest`
+binary (`/root/.local/bin/pytest`, a `uv tool install`) directly against
+`tests/test_schema_normalizer.py`, `test_rules.py`, `test_diff.py`, and
+`test_analyzer.py`: **75/75 passed**, including the exact spec §31
+acceptance case run through the generic engine (not hardcoded). This is a
+strictly stronger verification story than Phase 4's manual `asyncio`
+script, because it is the real pytest runner, not a substitute.
+
+**What still could not run through pytest:** `test_compatibility_
+service.py` (15 tests) and `test_compatibility_api.py` (11 tests) need the
+`session`/`client`/`db_engine` fixtures, which require SQLAlchemy/
+FastAPI/httpx — unavailable, so these files are written (and
+`python3.12 -m py_compile`-clean) but not pytest-executed this session.
+
+**What was verified instead, following the ADR-008 pattern:** migration
+0003's full `upgrade()` was hand-transcribed to raw SQL (types, tables,
+indexes, the `prevent_compatibility_evidence_mutation` trigger function
+and both triggers) and run directly against a real local Postgres 16
+(`agentabi_test`), on top of migrations 0001/0002 transcribed the same
+way. Then, with real rows (the spec §31 tool contract: baseline
+`{customer_id, amount, currency}` all required → candidate `{user_id,
+amount}`), directly exercised: insert/select round-trip of a
+`compatibility_scans` + 3 `scan_changes` rows including JSONB
+`old_value`/`new_value`; both immutability triggers, each producing the
+expected `ERROR: compatibility scan evidence is immutable once created`
+on a raw `UPDATE`; the pre-existing unique-slug constraint; and
+`ON DELETE CASCADE` from `projects` removing the scan and its changes.
+All as expected — proving the DDL and constraints are correct Postgres,
+same caveat as ADR-008: the Alembic *tool* itself wasn't exercised, only
+the SQL it would produce. The schema was dropped and recreated cleanly
+afterward; nothing persists between sessions in this sandbox.
+
+**Action for the user (once run somewhere with normal PyPI access):**
+```
+cd backend && make install
+alembic upgrade head
+pytest tests/test_compatibility_service.py tests/test_compatibility_api.py -v
+pytest tests/ -v   # full suite
+mypy app
+```
+
 ## ADR-021 — Phase 4 Neo4j/Docker verification gap: genuinely attempted, genuinely unavailable (2026-09-13)
 
 **Context:** The Phase 4 spec explicitly requires a real attempt to run

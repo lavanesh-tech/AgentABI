@@ -362,3 +362,155 @@ see ADR-021 for the full list). What that script could *not* cover:
 real Cypher (needs the `neo4j` driver and a reachable Neo4j) — those
 remain written-but-unexecuted this session; ADR-021 has the exact
 commands to complete verification once dependencies/Neo4j are reachable.
+
+## Phase 5: Compatibility / Schema-Diff Engine
+
+```
+backend/
+  app/
+    compatibility/
+      models.py               # Direction, ChangeType (~40), Classification, Severity,
+                               # CompatibilityStatus; Change + AnalysisResult dataclasses
+      schema_normalizer.py     # normalize_schema() — stable ordering, both nullable
+                               # conventions collapsed, bounded recursion depth
+      rules.py                 # classify()/classify_constraint_change()/derive_status() —
+                               # the only place a (ChangeType, Direction) becomes a verdict
+      diff.py                  # diff_schemas() (directional, structural) + diff_mapping()
+                               # (generic, non-directional) + sort_changes()
+      analyzer.py              # analyze(component_type, baseline, candidate) — dispatches
+                               # to one function per supported ComponentType
+    models/
+      compatibility_scan.py    # CompatibilityScan ORM model (+ summary count columns)
+      scan_change.py           # ScanChange ORM model (change_type: VARCHAR, not enum)
+    repositories/
+      compatibility_scan_repository.py
+    services/
+      compatibility_service.py # CompatibilityService — load versions, dispatch to
+                                # analyze(), persist scan + changes, no ORM in the diff path
+    api/v1/
+      compatibility.py         # POST/GET scans, GET scan, GET scan changes
+      errors.py                 # + InvalidCompatibilityComparison, UnsupportedCompatibilityType,
+                                 # SchemaNormalizationError (all 422)
+  alembic/versions/
+    0003_compatibility_scans.py # compatibility_scans, scan_changes, 3 new enums,
+                                 # prevent_compatibility_evidence_mutation() trigger
+  tests/
+    test_schema_normalizer.py    # pure unit tests
+    test_rules.py                 # pure unit tests
+    test_diff.py                  # pure unit tests (incl. the spec's acceptance case)
+    test_analyzer.py              # pure unit tests, one per supported ComponentType
+    test_compatibility_service.py # real-Postgres integration tests
+    test_compatibility_api.py     # real-Postgres + HTTP integration tests
+```
+
+### The engine is deterministic software, not an LLM call
+
+`app/compatibility/` has no LLM client, no prompt, no model call anywhere
+in its import graph. Every verdict — classification, severity, status —
+comes from `rules.py`'s lookup tables, applied to structural facts
+`diff.py` computed. This is the phase's one non-negotiable constraint: a
+compatibility result must be reproducible from the same two inputs, today
+and in five years, without depending on model behavior. LLM-generated
+*explanations* of a scan are an explicit later-phase concern (see
+ROADMAP.md); Phase 5 only produces the facts they'd explain.
+
+### Direction is explicit, never inferred
+
+`Direction.INPUT` / `Direction.OUTPUT` / `Direction.NEUTRAL` is threaded
+through every call to `diff_schemas()`/`classify()`. `analyzer.py` decides
+the direction by which field of a component's content a schema comes from
+(`input_schema` → `INPUT`, `output_schema` → `OUTPUT`; a standalone
+`SCHEMA` component → `NEUTRAL`) — never by guessing from field names.
+Removing a required field is compatible on the input side (existing
+callers already satisfy the old, stricter contract) and breaking on the
+output side (existing consumers may read that field); adding one is the
+mirror image. See ADR-023 for the full rules table and the one case
+(`REQUIRED_FIELD_ADDED` + `INPUT`) reserved for `Severity.CRITICAL`.
+
+### Normalization is not the same job as Phase 3's checksum
+
+Phase 3's `checksum` (ADR-012) answers "did the content change at all,"
+computed from canonicalized JSON — sufficient for change *detection*, not
+for change *explanation*. `schema_normalizer.normalize_schema()` exists
+because two schemas that mean the same thing can differ in
+non-semantic ways (property/required-list ordering, `type: "string"` vs.
+`type: ["string"]`, duplicate enum values) that must be collapsed before
+diffing — but never in semantic ways: two nullability spellings
+(`type: [T, "null"]` and OpenAPI-3.0's `nullable: true`) are recognized as
+the same concept, not merged away as "irrelevant metadata." Both
+`normalize_schema` and `diff_schemas` cap recursion at `_MAX_DEPTH = 64`
+and fail closed (`SchemaNormalizationError`) rather than overflowing the
+stack on pathological input.
+
+### Compatibility status vs. deployment risk
+
+`CompatibilityStatus` (`COMPATIBLE`/`WARNING`/`BREAKING`) is a fact about
+what changed between two versions, derived deterministically from the
+worst classification among a scan's changes (`derive_status()`). It is
+**not** a deployment gate — Phase 5 never returns PASS/WARN/BLOCK. That
+decision belongs to the Phase 11 Risk Engine, which will combine this
+evidence with blast radius (Phase 4) and replay/behavioral results
+(Phases 7/10) — a change classified `BREAKING` here might still be a safe
+deploy if blast radius is zero.
+
+### Why this shape
+
+- **Component-specific dispatch (`analyzer.py`'s `_DISPATCH` dict), not
+  one diff function forced onto every `ComponentType`** — Tool/MCP/Schema
+  get full structural `diff_schemas()`; Prompt/Model/Agent get targeted
+  field-by-field comparisons matching what their `*Content` models
+  actually represent; Workflow/Policy/API fall back to generic
+  `diff_mapping()` where Phase 3 didn't model a fixed structure (see
+  ADR-025). `PROVIDER` has no comparison defined at all yet —
+  `UnsupportedCompatibilityType`, not a silent no-op.
+- **`app/compatibility/` imports nothing from SQLAlchemy, Pydantic, or
+  FastAPI** — every function in `models.py`/`schema_normalizer.py`/
+  `rules.py`/`diff.py`/`analyzer.py` takes and returns plain dataclasses
+  and stdlib types. This is what let the core engine run through the real
+  `pytest` binary this session despite the sandbox's dependency
+  restrictions (see ADR-022) and is what keeps the diff engine reusable
+  by later phases (GitHub check-runs, LLM explanation generation) without
+  those callers pulling in a database session.
+- **`change_type` persisted as `VARCHAR`, `classification`/`severity`/
+  `status` as native Postgres enums** — the former is an open, growing
+  set (~40 members and climbing); the latter three are closed and stable.
+  See ADR-024.
+- **Immutable by construction and by trigger** — `CompatibilityService`
+  exposes no update/delete method, and `prevent_compatibility_evidence_
+  mutation()` rejects any `UPDATE` on either table at the database level,
+  unconditionally (stricter than Phase 3's content-only trigger — see
+  ADR-024). A scan is audit evidence for a release decision; it does not
+  change after the fact.
+- **Every `run_scan` call creates a new historical scan row** — a
+  deliberate idempotency choice, not an accidental side effect of missing
+  a uniqueness constraint (ADR-024).
+- **The same-component rule is enforced twice** — structurally, by
+  `run_scan`'s single-`component_id` signature, and defensively, by an
+  explicit runtime check in `_scan_from_versions` (ADR-024).
+- **Deterministic output ordering** — `sort_changes()` sorts by
+  `(path, change_type, classification)` and the result is persisted via an
+  explicit `order_index` column, never re-derived from insertion order or
+  a query's `ORDER BY` at read time.
+- **Routes stay thin** (`app/api/v1/compatibility.py`): Pydantic
+  schemas, a service call, a response mapping — no comparison logic, no
+  ORM objects crossing the API boundary.
+
+### Verification in this session
+
+The compatibility engine is plain-dataclass, stdlib-only Python, so it
+could be run through the real, already-installed standalone `pytest`
+binary via `pytest --noconftest` (bypassing `tests/conftest.py`'s
+`httpx` import) — **75/75 pure unit tests passed**
+(`test_schema_normalizer.py`, `test_rules.py`, `test_diff.py`,
+`test_analyzer.py`), including the spec's exact acceptance-case example
+run through the generic engine, not hardcoded. `ruff format --check` /
+`ruff check` are clean and `python3.12 -m py_compile` succeeds on every
+new/changed file. Migration 0003 was verified by direct DDL execution
+against a real local Postgres 16 (same ADR-008 pattern as every prior
+phase's migration) — the immutability triggers, cascade deletes, and a
+full insert/read round-trip of the spec's acceptance-case data all
+behaved as expected. `test_compatibility_service.py` and
+`test_compatibility_api.py` are written and `py_compile`-clean but could
+not be executed through `pytest` itself this session (need SQLAlchemy/
+FastAPI/httpx, unavailable — same restriction as every prior phase). See
+ADR-022 for the full account.

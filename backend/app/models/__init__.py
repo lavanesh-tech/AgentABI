@@ -5,20 +5,24 @@ that reason, and so does anything that needs `Base.metadata.tables`.
 """
 
 from app.models.base import Base
+from app.models.compatibility_scan import CompatibilityScan
 from app.models.component import Component
 from app.models.component_version import ComponentVersion
 from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember, OrganizationRole
 from app.models.project import Project
+from app.models.scan_change import ScanChange
 from app.models.user import User
 
 __all__ = [
     "Base",
+    "CompatibilityScan",
     "Component",
     "ComponentVersion",
     "Organization",
     "OrganizationMember",
     "OrganizationRole",
     "Project",
+    "ScanChange",
     "User",
 ]
