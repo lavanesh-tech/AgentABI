@@ -151,3 +151,88 @@ verification possible for this phase (see Verification below). This is a
 sandbox-only convenience — the checked-in `docker-compose.yml` Postgres
 service (from Phase 1) remains how the project actually runs Postgres in
 local development and CI.
+
+## Phase 3: Component Registry
+
+```
+backend/
+  alembic/versions/
+    0002_component_registry.py  # components, component_versions, immutability trigger
+  app/
+    domain/
+      enums.py                   # ComponentType, ComponentStatus
+      exceptions.py               # AgentABIError hierarchy (Not Found / Conflict / Invalid)
+      checksums.py                 # canonicalize_content(), compute_checksum() (SHA-256)
+      component_content.py         # per-ComponentType Pydantic content models + validate_content()
+    models/
+      component.py                 # Component (identity)
+      component_version.py         # ComponentVersion (immutable snapshot)
+    repositories/
+      project_repository.py        # get_by_id (existence check only)
+      component_repository.py
+      component_version_repository.py
+    services/
+      component_registry.py        # ComponentRegistryService — all business rules
+    api/v1/
+      components.py                # routes + request/response schemas
+      errors.py                    # domain exception -> HTTP response, registered once
+  tests/
+    test_checksums.py               # pure unit tests
+    test_component_content.py        # pure unit tests
+    test_component_registry_service.py  # real-Postgres integration tests
+    test_components_api.py               # real-Postgres HTTP integration tests
+```
+
+### Why this shape
+
+- **Generic `components` + `component_versions`, not one table per
+  component type.** All ten component types share the same identity/
+  versioning lifecycle (create, version, list, get-latest); only their
+  *content* shape differs, and that's handled by JSONB + per-type Pydantic
+  validation instead of ten near-identical tables. See ADR-009 for the
+  tradeoff this trades away.
+- **`sequence` (a Postgres `IDENTITY` column) instead of a
+  `latest_version_id` pointer on `components`.** An earlier design
+  considered a denormalized "latest version" foreign key on `components`,
+  but that requires a circular FK between `components` and
+  `component_versions` (created in two migration steps) and a
+  read-modify-write on every version insert. A monotonically increasing
+  `sequence`, indexed as `(component_id, sequence DESC)`, gives the same
+  O(log n) "latest version" lookup via a plain `ORDER BY ... LIMIT 1` with
+  none of that complexity — see ADR-010.
+- **Version immutability enforced twice, not just documented.** The
+  service layer has no `update_component_version`/`delete_component_version`
+  method at all (nothing to call even if a route wanted to). Independently,
+  a Postgres trigger (`prevent_component_version_mutation`) rejects any
+  `UPDATE` that changes `content` or `checksum`, so even a write that
+  bypasses the ORM/service entirely is blocked. `metadata` (non-semantic,
+  e.g. annotations) is intentionally left mutable. See ADR-011.
+- **Checksums computed from canonicalized content only** — sorted-key,
+  compact-separator JSON, SHA-256 — never from `id`/`created_at`/`sequence`,
+  so identical semantic content always produces the same checksum
+  regardless of key order, and two versions with the same content
+  (potentially on different components) provably hash the same. See
+  ADR-012.
+- **Repositories introduced for the first time in this phase**
+  (`ComponentRepository`, `ComponentVersionRepository`, a minimal
+  `ProjectRepository`), each a thin, single-entity query surface with zero
+  business logic — duplicate detection, tenant scoping, and content
+  validation all live in `ComponentRegistryService`. Phase 1/2 deliberately
+  had no repository layer because nothing needed one yet; this phase does
+  (the service needs the same handful of queries from multiple methods).
+- **`organization_id` denormalized onto `components`.** Set once from
+  `project.organization_id` at creation and never changed, so
+  tenant-scoped queries and the future Neo4j sync (Phase 4) don't need a
+  join through `projects` just to filter by organization.
+- **Domain exceptions, not scattered `try/except IntegrityError`.**
+  `ComponentNotFound`, `DuplicateComponent`, `ComponentVersionNotFound`,
+  `DuplicateComponentVersion`, `InvalidComponentContent`, `ProjectNotFound`
+  all derive from `AgentABIError` (via `NotFoundError`/`ConflictError`).
+  `app/api/v1/errors.py` maps them to HTTP responses in exactly one place,
+  registered once in `main.py`; no route handler contains error-handling
+  logic, and no database error text reaches the client.
+- **Tenant isolation enforced in the repository query itself**
+  (`WHERE component_id = ... AND project_id = ...`), not just by trusting
+  the `project_id` path parameter — a component ID that exists but belongs
+  to a different project returns 404, identically to an ID that doesn't
+  exist at all, so cross-project probing can't distinguish the two cases.

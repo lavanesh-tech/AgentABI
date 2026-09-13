@@ -7,7 +7,7 @@ every phase.
 |---|-------|--------|
 | 1 | Repository foundation + local Docker environment | ✅ Done (see caveat in DECISIONS.md ADR-005) |
 | 2 | PostgreSQL + SQLAlchemy + Alembic | ✅ Done (see caveat in DECISIONS.md ADR-006/ADR-008) |
-| 3 | Component Registry | ⬜ Not started |
+| 3 | Component Registry | ✅ Done (see caveat in DECISIONS.md ADR-013) |
 | 4 | Neo4j dependency graph | ⬜ Not started |
 | 5 | Compatibility / schema-diff engine | ⬜ Not started |
 | 6 | Trajectory recording | ⬜ Not started |
@@ -65,3 +65,28 @@ Run `make install && make lint && make typecheck && make test` and then
 `cd backend && ../backend/.venv/bin/alembic upgrade head` (against the
 `docker compose`-managed Postgres, or any real Postgres 16+) locally to
 complete verification before starting Phase 3.
+
+## Phase 3 notes
+
+Versioned Component Registry: `components` (identity) +
+`component_versions` (immutable JSONB content snapshots) tables
+(`0002_component_registry.py`), ten `ComponentType`s with per-type Pydantic
+content validation (`app/domain/component_content.py`), deterministic
+SHA-256 checksums (`app/domain/checksums.py`), a Postgres trigger blocking
+version content mutation, `ComponentRegistryService` with full CRUD/list/
+latest-version logic and tenant isolation, thin repositories
+(`Component`/`ComponentVersion`/`Project`), a domain exception hierarchy
+mapped centrally to HTTP responses, and paginated REST endpoints under
+`/api/v1/projects/{project_id}/components`.
+
+Same PyPI/Docker sandbox restriction as Phases 1-2 (ADR-013): `pytest`/
+`mypy` against real deps and `alembic upgrade` were not runnable here.
+Migrations 0001+0002 were hand-transcribed and applied together against
+real Postgres 16, and every new constraint/behavior (duplicate slug+type
+rejection, same slug allowed across types, auto-incrementing `sequence`,
+duplicate version rejection, the immutability trigger, cascade delete) was
+exercised directly and passed. Ruff (format + lint) and `python -m
+py_compile` passed clean on every new file.
+
+Run `make install && make lint && make typecheck && make test && make
+migrate` locally to complete verification before starting Phase 4.
