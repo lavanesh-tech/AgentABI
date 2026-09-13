@@ -236,3 +236,129 @@ backend/
   the `project_id` path parameter — a component ID that exists but belongs
   to a different project returns 404, identically to an ID that doesn't
   exist at all, so cross-project probing can't distinguish the two cases.
+
+## Phase 4: Neo4j Dependency Graph
+
+```
+backend/
+  app/
+    domain/
+      enums.py                    # + DependencyRelationshipType (10 members)
+      exceptions.py                # + GraphComponentNotFound, InvalidDependencyRelationship,
+                                    #   GraphUnavailable
+      relationship_rules.py        # closed (source_type, rel, target_type) allow-list
+    graph/
+      client.py                    # async Neo4j driver singleton, check_graph_connection(),
+                                    # dispose_driver() — mirrors core/database.py's pattern
+      models.py                    # ComponentNode, DependencyEdge (plain dataclasses)
+      repository.py                # GraphRepository Protocol + Neo4jGraphRepository +
+                                    # all Cypher + initialize_graph_schema()
+    services/
+      dependency_graph.py          # DependencyGraphService — sync/create/delete/list
+      blast_radius.py              # BlastRadiusService — pure-Python BFS
+    core/
+      readiness.py                 # pluggable READINESS_CHECKS registry
+    api/v1/
+      graph.py                     # sync/dependencies/dependents/blast-radius routes
+      health.py                    # /ready now aggregates every registered check
+      errors.py                    # + InvalidDependencyRelationship (422), GraphUnavailable (503)
+  tests/
+    fakes.py                        # FakeGraphRepository — in-memory GraphRepository
+    test_relationship_rules.py       # pure unit tests
+    test_dependency_graph_service.py # service tests (real Postgres + FakeGraphRepository)
+    test_blast_radius_service.py     # BFS/cycle/tenant-isolation unit tests
+    test_graph_repository.py         # real-Neo4j integration tests (skip if unreachable)
+    test_health.py                   # updated for the checks: {...} readiness shape
+```
+
+### PostgreSQL vs. Neo4j responsibility split
+
+PostgreSQL (Phase 2/3) stays the single source of truth for everything a
+component *is*: its identity, its versioned JSONB content, checksums,
+immutability. Neo4j's only job is answering graph-shaped questions
+PostgreSQL is structurally bad at: "what does X depend on," "what depends
+on X," "if X changes, what's affected, how many hops away, and along which
+paths." A `Component` node in Neo4j is deliberately a thin mirror of
+Postgres identity columns (`component_id`, `project_id`,
+`organization_id`, `component_type`, `name`, `slug`, `version`,
+`checksum`, `synced_at`) — never the JSONB `content` payload itself (see
+ADR-015). Sync is one explicit direction, Postgres → Neo4j
+(`DependencyGraphService.sync_component`), synchronous and service-driven
+rather than event-driven (Kafka-based propagation is Phase 13 — see
+ADR-017); nothing ever writes Neo4j → Postgres.
+
+### Dependency direction convention
+
+Every edge points from the dependent component to its dependency:
+`(Agent)-[:CALLS]->(Tool)` reads "Agent depends on Tool." "X's
+dependencies" follows X's outgoing edges; "X's dependents" (who breaks if
+X changes — the actual blast-radius question) follows X's **incoming**
+edges. This is the single easiest thing in this phase to get backwards
+silently, so it has its own ADR (ADR-020) plus inline comments at every
+Cypher query that reads in a specific direction
+(`app/graph/repository.py`'s `_LIST_DEPENDENCIES_QUERY`/
+`_LIST_DEPENDENTS_QUERY`), and `BlastRadiusService` only ever calls
+`list_direct_dependents`.
+
+### Why this shape
+
+- **A `GraphRepository` Protocol, with `Neo4jGraphRepository` as the only
+  real implementation and `tests/fakes.py`'s `FakeGraphRepository` as an
+  in-memory test double** — all Cypher lives behind this one interface;
+  `DependencyGraphService`/`BlastRadiusService` never see a raw Neo4j
+  `Record`. This is what makes the BFS/cycle/tenant-isolation logic
+  independently unit-testable without a live Neo4j (see ADR-018,
+  ADR-021).
+- **Ten closed relationship types, validated by a centralized
+  `(source_type, relationship_type, target_type)` allow-list**
+  (`app/domain/relationship_rules.py`), checked once in
+  `DependencyGraphService.create_dependency` before any graph write — see
+  ADR-014.
+- **Blast radius is pure-Python BFS over one-hop repository calls, not a
+  Cypher variable-length path** — explicit `visited`-set cycle handling,
+  explicit `max_depth`, deterministic (sorted) ordering, and a `path`
+  recorded on every `BlastRadiusEntry` for explainability. See ADR-018 for
+  the full rationale, including why this made real test coverage possible
+  in an environment where a live Neo4j could not be obtained.
+- **Tenant isolation enforced directly in every Cypher `MATCH` clause**
+  (every node pattern includes `project_id`, not just the query's "entry"
+  node), not only trusted from the URL path parameter — see ADR-019.
+- **Idempotent schema initialization** (`initialize_graph_schema` —
+  `CREATE CONSTRAINT ... IF NOT EXISTS` / `CREATE INDEX ... IF NOT EXISTS`
+  for `component_id` uniqueness, `project_id`, and `component_type`) is
+  safe to call on every app startup.
+- **`app/core/readiness.py`'s pluggable check registry** replaces
+  `/ready`'s old hardcoded `database: bool` with `checks: {name: bool}`,
+  aggregating Postgres and Neo4j today and designed for Redis/Kafka later
+  without changing the endpoint itself — see ADR-016.
+- **Domain errors specific to the graph layer**
+  (`GraphComponentNotFound` → 404, `InvalidDependencyRelationship` → 422,
+  `GraphUnavailable` → 503) extend the existing Phase 3 exception
+  hierarchy and are mapped centrally in `app/api/v1/errors.py`, exactly
+  like Phase 3's component errors — no new error-handling pattern
+  introduced.
+- **Routes stay thin** (`app/api/v1/graph.py`): request/response Pydantic
+  schemas, a service call, a response mapping — no Cypher, no direct
+  driver access, no raw Neo4j types crossing the API boundary.
+
+### Neo4j/Docker in this session
+
+Neo4j could not be run for real in this session, in either the cloud
+sandbox or (via the device bridge) the Mac — see ADR-021 for exactly what
+was attempted and the exact commands to complete verification once
+Neo4j/network access is available. Unlike Phases 1–3, this sandbox could
+not install *any* of the project's Python dependencies this session
+either (`pip`/`uv`/apt all return 403 — the same restriction as before,
+re-confirmed, not new), so the actual `pytest` suite could not be run.
+What *was* verified for real: ruff (format + lint) clean,
+`python3.12 -m py_compile` clean on every new/changed file, and — because
+`app/graph/repository.py`'s `neo4j` import was made lazy so the
+`GraphRepository` Protocol is importable without the package installed —
+a standalone script genuinely executing `BlastRadiusService` and
+`relationship_rules` against `FakeGraphRepository`, 26/26 checks passing
+(cycle termination/dedup, direction, depth, tenant isolation, determinism;
+see ADR-021 for the full list). What that script could *not* cover:
+`DependencyGraphService`'s `sync_component` (needs SQLAlchemy) and any
+real Cypher (needs the `neo4j` driver and a reachable Neo4j) — those
+remain written-but-unexecuted this session; ADR-021 has the exact
+commands to complete verification once dependencies/Neo4j are reachable.

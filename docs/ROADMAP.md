@@ -8,7 +8,7 @@ every phase.
 | 1 | Repository foundation + local Docker environment | ✅ Done (see caveat in DECISIONS.md ADR-005) |
 | 2 | PostgreSQL + SQLAlchemy + Alembic | ✅ Done (see caveat in DECISIONS.md ADR-006/ADR-008) |
 | 3 | Component Registry | ✅ Done (see caveat in DECISIONS.md ADR-013) |
-| 4 | Neo4j dependency graph | ⬜ Not started |
+| 4 | Neo4j dependency graph | ✅ Done (see caveat in DECISIONS.md ADR-021) |
 | 5 | Compatibility / schema-diff engine | ⬜ Not started |
 | 6 | Trajectory recording | ⬜ Not started |
 | 7 | Replay engine | ⬜ Not started |
@@ -90,3 +90,42 @@ py_compile` passed clean on every new file.
 
 Run `make install && make lint && make typecheck && make test && make
 migrate` locally to complete verification before starting Phase 4.
+
+## Phase 4 notes
+
+Neo4j dependency graph and blast-radius foundation: `DependencyRelationshipType`
+(10 members) + a closed `(source_type, relationship_type, target_type)`
+allow-list (`app/domain/relationship_rules.py`), an async Neo4j driver
+singleton (`app/graph/client.py`), a `GraphRepository` Protocol +
+`Neo4jGraphRepository` with all Cypher and idempotent schema
+initialization (`app/graph/repository.py`), `DependencyGraphService`
+(Postgres→Neo4j sync, dependency create/delete/list with validation and
+tenant scoping), a pure-Python BFS `BlastRadiusService` with explicit
+cycle/depth/dedup handling, a pluggable readiness-check registry
+extending `/api/v1/ready` to cover both Postgres and Neo4j, thin REST
+endpoints under `/api/v1/projects/{project_id}/graph/...`, and new domain
+errors (`GraphComponentNotFound`, `InvalidDependencyRelationship`,
+`GraphUnavailable`) mapped centrally to HTTP.
+
+Same PyPI/Docker sandbox restriction as Phases 1-3, and this phase also
+specifically needed (and could not get) a running Neo4j — see
+DECISIONS.md ADR-021 for exactly what was attempted (a working Docker
+daemon this session, but `registry-1.docker.io` pulls return 403; the Mac
+device-bridge VM has no Docker, Python 3.10 only, and blocked network) and
+the exact commands to complete verification later. Unlike Phases 1-3, no
+Python dependency at all (`fastapi`, `sqlalchemy`, `neo4j`, ...) could be
+installed in this sandbox this session either, so the actual `pytest`
+suite did not run. What did run for real: ruff (format + lint) clean,
+`python3.12 -m py_compile` clean on every file, and — via a lazy `neo4j`
+import that keeps `GraphRepository` importable without the driver
+installed — a standalone script genuinely exercising
+`BlastRadiusService`/`relationship_rules` against the in-memory
+`FakeGraphRepository`, 26/26 checks passing (cycle termination and
+deduplication on a 3-node cycle, correct dependency/dependent direction,
+depth and path tracking, `max_depth` cutoff, tenant isolation,
+deterministic ordering).
+
+Run `make install && make lint && make typecheck && make test` and
+`docker compose -f docker-compose.yml up -d neo4j && pytest
+tests/test_graph_repository.py -v` locally to complete verification
+before starting Phase 5.

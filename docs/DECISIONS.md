@@ -2,6 +2,323 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-021 — Phase 4 Neo4j/Docker verification gap: genuinely attempted, genuinely unavailable (2026-09-13)
+
+**Context:** The Phase 4 spec explicitly requires a real attempt to run
+Neo4j — via Docker or any other means — in both the cloud sandbox and (per
+the user's move of the authoritative repo) the Mac, before concluding it
+is unavailable, with exact commands documented if it truly isn't. This ADR
+records exactly what was tried, in both places, this session.
+
+**Cloud sandbox (`/home/claude/agentabi`):**
+- `docker version` succeeds — a Docker daemon (`sudo -n dockerd`, 29.4.3)
+  runs in this container, which was *not* true in earlier phases. This is
+  new and worth recording.
+- `docker pull hello-world` (and, by the same mechanism,
+  `docker compose -f docker-compose.yml up -d neo4j`) fails:
+  `403 Forbidden` from `registry-1.docker.io` — the same outbound-egress
+  allowlist that blocks PyPI (`pypi.org`/`files.pythonhosted.org`) and apt
+  (`archive.ubuntu.com`, confirmed 403 again this phase via
+  `apt-get install python3-fastapi`) also blocks the Docker Hub registry.
+  So: the daemon works, but no image — Neo4j or otherwise — can be pulled.
+- No `neo4j`/`cypher-shell` binary exists as a system package, and no
+  offline-installable Neo4j distribution (server tarball, `.deb`) is
+  reachable for the same network-policy reason. Java 21 is present (in
+  case a plain-jar install were possible), but there is nothing to fetch
+  to install *with* it.
+- No Python package (`neo4j`, or in fact `fastapi`/`sqlalchemy`/anything
+  in `pyproject.toml`) could be installed in this container this session
+  — `pip install`, `uv pip install -e .`, and the apt fallback all return
+  403. This is the same restriction Phases 1–3 hit (ADR-005/006/008/013),
+  not a new regression specific to Neo4j.
+
+**Mac Desktop, via the device bridge (`mcp__remote-devices__device_bash`,
+which runs in an isolated Linux VM on the user's Mac — explicitly **not**
+a shell on macOS itself, so this does not prove anything about the Mac's
+own Docker Desktop or Homebrew state):**
+- No `docker` binary in that VM.
+- Python 3.10 only (Phase 4, like the rest of the backend, targets 3.12
+  language features — PEP 695 generics, `enum.StrEnum` usage patterns —
+  so even a same-version pip install wouldn't produce a matching runtime).
+- `curl` to `pypi.org` returns `403 Forbidden from proxy after CONNECT` —
+  the VM's own egress is blocked by the same class of policy.
+
+**Conclusion:** Neo4j could not be run for real, anywhere reachable from
+this session, this phase. This is a genuine, actively-attempted gap, not
+an assumed one.
+
+**What was verified for real instead, given that constraint:**
+- `ruff format --check` / `ruff check` — clean on every Phase 4 file
+  (ruff itself is a standalone Rust binary already present at
+  `/root/.local/bin/ruff`, so it needed no install).
+- `python3.12 -m py_compile` on every new/changed file — clean (proves
+  syntax validity under the actual target Python version, even without
+  the dependencies installed to run it).
+- `mypy` — fails immediately on `pyproject.toml`'s `pydantic.mypy` plugin
+  (`No module named 'pydantic'`), identical to every prior phase's
+  documented mypy gap; not a new Phase 4-specific failure.
+- **The deterministic BFS traversal, cycle handling, tenant isolation, and
+  relationship-validation logic — the actual business logic this phase's
+  spec cares most about proving — genuinely ran, this session, for real.**
+  `pytest` itself could not run (not installed, see above), so this was
+  executed as a standalone `asyncio`-driven script
+  (`/tmp/verify_phase4_pure_logic.py`, not committed — a manual run, not a
+  replacement for the real `pytest` suite) that imports the actual
+  `app.services.blast_radius.BlastRadiusService` and
+  `app.domain.relationship_rules` modules directly and exercises them
+  against `FakeGraphRepository` (`tests/fakes.py`). This was possible at
+  all only because `app/graph/repository.py`'s `neo4j` import was made
+  lazy (moved under `TYPE_CHECKING`/inside the methods that actually touch
+  the driver, not at module level — see its module docstring) specifically
+  so the `GraphRepository` Protocol and everything built on it could be
+  imported without the `neo4j` package installed. Result: **26/26 checks
+  passed**, covering every allowed relationship triple, the
+  Model-cannot-call-Workflow rejection, a leaf component's empty blast
+  radius, an unsynced-component error, direct vs. transitive dependents
+  with correct depth/path values, `max_depth` cutoff, a 3-node cycle
+  (A→B→C→A) terminating with no duplicates and the correct 2-member
+  result (not 3 — confirming the cycle didn't leak the start node back
+  into its own result), cross-tenant isolation, and deterministic ordering
+  across repeated calls. This is real execution of real code, not a
+  fabricated result — but it is not the same as running the actual
+  `tests/test_blast_radius_service.py`/`test_relationship_rules.py` files
+  through `pytest` (which additionally need `pytest`/`pytest-asyncio`
+  installed, and were written to mirror this exact coverage plus more —
+  see ADR-018). `DependencyGraphService`'s tests additionally need
+  SQLAlchemy for the real-Postgres `sync_component` integration test, so
+  that one genuinely could not be executed this way.
+- `tests/test_graph_repository.py` exists specifically to exercise real
+  Cypher against a real Neo4j instance, and is written to `pytest.skip()`
+  cleanly (not fail, not fake a pass) when Neo4j isn't reachable — see
+  its module docstring for the exact commands to run it for real.
+
+**Action for the user (exact commands, once run somewhere with normal
+network/Docker access):**
+```
+docker compose -f docker-compose.yml up -d neo4j
+cd backend && make install
+pytest tests/test_graph_repository.py -v          # real Cypher, currently skipped
+pytest tests/ -v                                   # full suite, including the above
+mypy app
+```
+Until that runs clean, Phase 4's Cypher itself (as opposed to the Python
+logic layered on top of it) should be treated as reviewed, not proven.
+
+## ADR-020 — Dependency direction convention: edges point from dependent to dependency (2026-09-13)
+
+**Decision:** Every `DependencyRelationshipType` edge points **from the
+component that depends on something, to the thing it depends on** — e.g.
+`(Agent)-[:CALLS]->(Tool)`, `(Agent)-[:USES_MODEL]->(Model)`,
+`(Workflow)-[:CONTAINS]->(Agent)`. "X's dependencies" = X's outgoing
+edges. "X's dependents" (who breaks if X changes — the actual
+blast-radius question) = X's **incoming** edges.
+
+**Why this is worth an ADR of its own, not just a docstring:** it is the
+single easiest thing to get backwards in this whole phase, and getting it
+backwards would silently invert every blast-radius answer (reporting "what
+this component depends on" when asked "what depends on this component," or
+vice versa) without ever raising an error. `app/graph/repository.py`'s
+`_LIST_DEPENDENCIES_QUERY` (follows `-[r]->`) and
+`_LIST_DEPENDENTS_QUERY` (follows `<-[r]-`) are the only two Cypher
+queries that read in opposite directions, and both carry an inline
+comment restating this convention next to the arrow. `BlastRadiusService`
+calls only `list_direct_dependents` (incoming edges), never
+`list_direct_dependencies`, and this is tested explicitly (see
+`test_blast_radius_service.py::test_direct_dependents_only` and
+`::test_transitive_dependents_multiple_hops`, which assert the *specific*
+components returned, not just a count, so a direction bug would fail
+loudly).
+
+**Alternative considered:** edges pointing from dependency to dependent
+(`(Tool)-[:CALLED_BY]->(Agent)`) — rejected because relationship names
+read more naturally in the "X USES_MODEL Y" / "X CALLS Y" direction that
+matches how a developer would say the relationship out loud, at the cost
+of "dependents" being the less-intuitive (incoming) direction — a cost
+paid once, in this ADR and the code comments, rather than in every
+relationship type's name.
+
+## ADR-019 — Tenant isolation enforced directly in Cypher, not only at the application layer (2026-09-13)
+
+**Decision:** Every Cypher query in `app/graph/repository.py` that reads
+or writes a node includes `project_id` as a `MATCH` predicate on *every*
+node pattern in the query — not just the "entry point" node. E.g.
+`_LIST_DEPENDENCIES_QUERY` filters both the source (`{component_id: ...,
+project_id: ...}`) and the target (`WHERE target.project_id = $project_id`)
+by tenant, and `create_dependency`/`delete_dependency` scope both
+`source`/`target` `MATCH` clauses by `project_id`.
+
+**Why not rely on component IDs being UUIDs (globally unique, so
+"scoping" is theoretically redundant):** the spec explicitly calls this
+out as insufficient, and it's right to: a UUID being globally unique
+doesn't stop a Cypher query written without a `project_id` filter from
+matching (and returning, or worse, linking) a node that happens to belong
+to a different tenant if that node's `component_id` were ever guessed,
+logged, or reused across a bug. Scoping every `MATCH` closes that off
+structurally — a cross-tenant query has no path to succeed even if the
+caller supplies a correct-but-foreign `component_id`, rather than "isn't
+expected to happen because IDs don't collide."
+
+**Verified by:** `test_dependency_graph_service.py::
+test_tenant_isolation_across_projects` and
+`test_blast_radius_service.py::test_tenant_isolation_in_blast_radius`
+both create a real edge under `project_a` and assert that querying the
+*same* `component_id` under `project_b` raises `GraphComponentNotFound`
+rather than leaking the other tenant's data — plus
+`test_graph_repository.py::test_get_component_node_is_tenant_scoped`
+against real Neo4j (skipped in this session per ADR-021, but written to
+run for real once Neo4j is reachable).
+
+## ADR-018 — Blast radius as pure-Python BFS over one-hop repository calls, not a Cypher variable-length path (2026-09-13)
+
+**Decision:** `BlastRadiusService.compute()` is a plain Python
+breadth-first search: it calls `GraphRepository.list_direct_dependents()`
+one hop at a time, tracks a `visited` set of component IDs, and stops at
+`max_depth`. It does **not** issue a single Cypher query like `MATCH
+(x)<-[*1..10]-(y) RETURN y`.
+
+**Why:** Three reasons, in order of how much they mattered:
+1. **Cycle/dedup/depth-limit control is explicit and independently
+   testable.** A Cypher variable-length path *can* be made cycle-safe
+   (`apoc.path.subgraphNodes`, or manual dedup in the query), but that
+   correctness then lives inside a query string that can only be tested
+   against a live database. The BFS's cycle handling
+   (`visited.add(component_id)` before a node is enqueued, so a cycle
+   simply produces no new work at that node) is ~5 lines of plain Python,
+   directly unit-tested via `FakeGraphRepository` — including the
+   specific case the spec calls out, a 3-node cycle A→B→C→A
+   (`test_blast_radius_service.py::test_cycle_terminates_and_deduplicates`)
+   — without needing a real Neo4j instance at all. Given this phase's
+   documented Neo4j-unavailability (ADR-021), that testability is not a
+   nice-to-have; it is the difference between this algorithm having real
+   test coverage and having none.
+2. **No LLM, no heuristics, nothing implicit.** The spec is explicit that
+   blast radius must be deterministic graph reachability. A hand-written
+   BFS makes every step of "how did we decide X is affected" traceable in
+   plain Python (and in each `BlastRadiusEntry.path`), rather than trusting
+   a query planner's traversal order.
+3. **`GraphRepository` stays a narrow, boring interface** (seven single-hop
+   methods) instead of growing a bespoke "give me the whole reachable
+   subgraph" method whose semantics (depth limit? cycle handling? which
+   fields come back?) would have to be re-specified and re-tested per
+   backend.
+
+**Tradeoff being made:** N+1-shaped traversal (one query per BFS layer,
+not one query for the whole subgraph) — for a project's scale (component
+counts, not raw event volume) this is the right trade; if it ever isn't,
+the `GraphRepository` Protocol boundary is exactly where a batched Cypher
+`list_dependents_multi(ids)` method could be added later without
+`BlastRadiusService`'s algorithm changing.
+
+**Alternative considered:** `apoc.path.subgraphAll`/variable-length Cypher
+— rejected per the above, and additionally requires the APOC plugin
+(already planned for `docker-compose.yml`'s Neo4j service per Phase 1, but
+an extra moving part this phase's core logic doesn't need to depend on).
+
+## ADR-017 — Synchronous, service-driven Postgres→Neo4j sync (not event-driven) (2026-09-13)
+
+**Decision:** `DependencyGraphService.sync_component()` is a plain async
+method an API caller invokes explicitly (`POST
+/projects/{id}/components/{id}/graph/sync`) to push one component's
+current Postgres identity into Neo4j. There is no background worker, no
+outbox table, no Kafka producer/consumer keeping the two databases
+continuously in sync.
+
+**Why:** The spec explicitly scopes Kafka/event-driven processing to
+Phase 13, and building an event pipeline now would mean designing it twice
+— once without the event bus that Phase 13 actually introduces (topics,
+consumer groups, delivery semantics), and once for real. A synchronous
+sync call is the honest amount of infrastructure for what Phase 4 alone
+needs: a caller (a future API consumer, or Phase 5's compatibility engine)
+that has just created/updated a component and wants it reflected in the
+graph can call `sync_component` right after, and get a definite
+success/failure answer inline rather than an eventually-consistent one.
+
+**Consequence documented, not hidden:** the graph is only ever as fresh as
+the last explicit `sync_component` call for a given component — creating
+a `ComponentVersion` in Postgres does **not** automatically update the
+graph node's `version`/`checksum`. This is intentional scope, not an
+oversight: automatic propagation is exactly the kind of "keep two stores
+consistent on every write" problem Phase 13's event pipeline exists to
+solve properly (outbox pattern, retries, ordering), and doing it
+ad hoc here would be building a worse version of that early.
+
+## ADR-016 — Pluggable readiness-check registry (`app/core/readiness.py`) (2026-09-13)
+
+**Decision:** `/api/v1/ready` no longer hardcodes a single `database: bool`
+field. `app/core/readiness.py` holds a `READINESS_CHECKS: dict[str,
+Callable[[], Awaitable[bool]]]` registry (currently `database` and
+`graph`); the endpoint runs every registered check and returns `{"status":
+"ok"|"unavailable", "checks": {name: bool, ...}}`, 503 if any check fails.
+
+**Why:** The spec calls for Neo4j readiness to extend, not replace or
+special-case, the existing Postgres check, and to be designed so
+Redis/Kafka (Phases 13+) can be added the same way. A dict of
+zero-argument async callables is the minimum structure that achieves that
+— adding a future check is a one-line addition to `READINESS_CHECKS`, not
+a change to the endpoint function itself. `/health` (pure liveness) is
+deliberately untouched by any of this — it still never calls an external
+dependency.
+
+**Breaking change acknowledged:** this changes `ReadinessResponse`'s shape
+(`database: bool` → `checks: dict[str, bool]`); `tests/test_health.py` was
+updated in the same commit, and this is called out explicitly rather than
+silently changing a previously-documented response shape.
+
+## ADR-015 — Graph nodes carry identity only, never the JSONB content payload (2026-09-13)
+
+**Decision:** `ComponentNode` (the dataclass `Neo4jGraphRepository`
+reads/writes) mirrors exactly the identity columns already on Postgres's
+`components`/`component_versions` tables (`component_id`, `project_id`,
+`organization_id`, `component_type`, `name`, `slug`, `version`,
+`checksum`, `synced_at`) and nothing else — no `content` JSONB, no
+`description`, no `status`.
+
+**Why:** PostgreSQL is, and stays, the single source of truth for a
+component's actual configuration/content (per ADR-009's generic
+`components`/`component_versions` design). Neo4j's job is answering graph
+questions — "what depends on this," "what breaks if this changes" — which
+need identity and relationships, not the payload those relationships point
+at. Duplicating `content` into Neo4j would mean every future
+`ComponentVersion` write has to remember to re-sync it (a second place to
+keep the immutability/versioning invariants ADR-011 already enforces once,
+in Postgres), for a field the graph layer never actually queries by.
+
+**Consequence:** a blast-radius or dependency-listing API response can
+name and identify an affected component, but a caller who needs to know
+*what changed about it* still goes to `GET
+/projects/{id}/components/{id}/versions/latest` — which is the correct
+system to ask, since that's where the immutable, checksummed truth lives.
+
+## ADR-014 — Ten fixed relationship types, validated by a closed (source_type, relationship_type, target_type) allow-list (2026-09-13)
+
+**Decision:** `DependencyRelationshipType` is a ten-member `StrEnum`
+(`USES_MODEL`, `USES_PROMPT`, `CALLS`, `BELONGS_TO`, `USES_SCHEMA`,
+`CALLS_API`, `CONTAINS`, `DEPENDS_ON`, `APPLIES_TO`, `PROVIDED_BY`), and
+`app/domain/relationship_rules.py` holds a `frozenset` of exactly which
+`(source ComponentType, relationship_type, target ComponentType)` triples
+are semantically valid (e.g. `(AGENT, CALLS, TOOL)` is allowed;
+`(MODEL, CALLS, WORKFLOW)` is not). `DependencyGraphService.
+create_dependency` calls `validate_relationship()` before any Neo4j write
+reaches the repository layer.
+
+**Why centralized and closed, not open/extensible-by-string:** the spec
+explicitly requires rejecting nonsensical relationships (its own example:
+a Model can't CALL a Workflow), and requires this rule live in exactly one
+tested place rather than being re-implemented per route or per service
+method. A closed allow-list (rather than, say, "anything goes, reject only
+an explicit denylist") also means adding an eleventh relationship type
+later is a deliberate, reviewed addition to both the enum and the
+allow-list — never an accidental new capability from a typo'd string
+reaching Neo4j. `test_relationship_rules.py::
+test_every_relationship_type_is_used_by_at_least_one_allowed_triple`
+guards the enum and the allow-list from drifting apart in either
+direction.
+
+**Alternative considered:** validating shape with a lighter rule (e.g. "any
+type may `DEPENDS_ON` any type, but the other nine are type-restricted") —
+rejected as under-specified; the spec's own example needs a real per-triple
+table, not a partial rule with exceptions.
+
 ## ADR-013 — Phase 3 network/Docker verification gap persists (2026-09-13)
 
 **Context:** Same restriction as ADR-005/ADR-006, re-confirmed for Phase 3:
