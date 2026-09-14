@@ -9,6 +9,8 @@ from app.models.base import Base
 from app.models.compatibility_scan import CompatibilityScan
 from app.models.component import Component
 from app.models.component_version import ComponentVersion
+from app.models.differential_change import DifferentialChangeRecord
+from app.models.differential_report import DifferentialReportRecord
 from app.models.github_webhook_delivery import GitHubWebhookDelivery
 from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember, OrganizationRole
@@ -26,6 +28,8 @@ __all__ = [
     "CompatibilityScan",
     "Component",
     "ComponentVersion",
+    "DifferentialChangeRecord",
+    "DifferentialReportRecord",
     "GitHubWebhookDelivery",
     "Organization",
     "OrganizationMember",

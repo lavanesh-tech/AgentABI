@@ -40,6 +40,8 @@ class Permission(enum.StrEnum):
     MEMBERSHIP_MANAGE = "membership:manage"
     ORG_MANAGE = "org:manage"
     AUDIT_READ = "audit:read"
+    DIFFERENTIAL_READ = "differential:read"
+    DIFFERENTIAL_EXECUTE = "differential:execute"
 
 
 # MEMBER: least-privilege, read-only across every organization-scoped
@@ -52,6 +54,10 @@ _MEMBER_PERMISSIONS: frozenset[Permission] = frozenset(
         Permission.TRAJECTORY_READ,
         Permission.REPLAY_READ,
         Permission.GRAPH_READ,
+        # Phase 10 spec §22: MEMBER may read differential reports, same
+        # bucket as every other read-only resource — reading derived
+        # evidence isn't a privileged action, only computing it is.
+        Permission.DIFFERENTIAL_READ,
     }
 )
 
@@ -68,6 +74,11 @@ _ADMIN_PERMISSIONS: frozenset[Permission] = _MEMBER_PERMISSIONS | frozenset(
         Permission.TRAJECTORY_WRITE,
         Permission.REPLAY_EXECUTE,
         Permission.GRAPH_WRITE,
+        # Phase 10 spec §22: running a differential analysis is a
+        # privileged engineering action (same bucket as SCAN_EXECUTE/
+        # REPLAY_EXECUTE) — MEMBER never triggers analysis, only reads
+        # results.
+        Permission.DIFFERENTIAL_EXECUTE,
         # Security Phase E spec §17: ADMIN may read the organization's
         # audit trail (a privileged engineering/security action, same
         # bucket as SCAN_EXECUTE/REPLAY_EXECUTE) — only membership
