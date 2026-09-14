@@ -2,6 +2,64 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-070 — Frontend OAuth token handoff: point `github_oauth_redirect_uri` at a frontend-owned callback route, no backend code change (2026-09-14)
+
+`GET /auth/github/callback` (`app/api/v1/auth.py`) returns the AgentABI
+JWT as a JSON response body — confirmed by reading it directly, not
+inferred — with no redirect-with-token, no `Set-Cookie`, and no
+frontend-origin-aware behavior in `GitHubOAuthService`/`github_oauth_
+redirect_uri` (`app/core/config.py`, a single plain string used
+identically by both `start_login`'s authorize-URL construction and
+`handle_callback`'s code exchange). Redesigning this into a cookie- or
+redirect-based flow was out of scope (spec §1/§8: inspect actual
+behavior, don't assume/redesign). Instead, `github_oauth_redirect_uri`
+is set (env/config only) to the frontend's own `/auth/callback` route.
+GitHub redirects the browser there with `code`/`state`/`error`;
+`frontend/app/auth/callback/page.tsx` forwards those same params to the
+backend's callback endpoint via a client-side, unauthenticated fetch,
+then stores the returned JWT. Zero backend code changes — the OAuth App
+registered with GitHub, and the value of `github_oauth_redirect_uri`,
+must both point at the frontend origin in every environment (documented
+in `frontend/.env.example`'s sibling backend guidance and this ADR).
+
+Token storage: `sessionStorage` (`frontend/lib/auth-storage.ts`), not
+`localStorage` or an in-memory-only store. Given the backend hands back
+a bearer token rather than an httpOnly cookie, there is no storage
+option here that is safe from a same-origin XSS read — that exposure is
+inherent to the existing backend contract, not something the frontend
+can close without a backend change out of scope for this phase.
+`sessionStorage` was chosen over `localStorage` because it is scoped to
+one tab and cleared on tab close, narrowing (not eliminating) the
+exposure window; it was chosen over in-memory-only state because losing
+the session on every page refresh would make the dashboard unusable for
+a recruiter/demo audience, undermining spec §2's purpose. This is
+documented as an accepted, real tradeoff, not a security control.
+
+## ADR-069 — New read-only `GET /projects/{project_id}/github/pr-analyses[/{id}]` endpoint; no write-path change (2026-09-14)
+
+Phase 14's mandatory backend inventory (spec §1) found `GitHubPull
+RequestAnalysis` rows are written by the Phase 12/13 webhook pipeline
+(`GitHubPullRequestAnalysisService`) but were never exposed over HTTP —
+no router, no list/get-by-id method on `GitHubPRAnalysisRepository`
+beyond the internal `get_by_idempotency_key`/`get_by_id` the pipeline
+itself uses. Spec §1/§16/§25/§26 explicitly allow adding "the minimum
+necessary" read endpoint rather than redesigning the backend around the
+frontend's needs. Added: `GitHubPRAnalysisRepository.list_by_project`
+(paginated, optional `pull_request_number` filter, ordered newest-
+first), `GitHubPullRequestAnalysisService.list_analyses`/`get_analysis`,
+and `app/api/v1/github_pr_analyses.py` — same layering, same
+`GITHUB_INTEGRATION_READ` permission, same pagination envelope shape as
+every other list endpoint in this codebase. No change to `start_
+analysis`/`run_analysis`/`_publish_result` or any other write-path
+method. The router's service-construction dependency instantiates
+`HttpxGitHubChecksClient` (never called on this read path — no method
+here publishes a check) purely because the existing service constructor
+requires one; this mirrors `app/api/v1/github_webhook.py`'s own
+instantiation exactly, is a cheap no-I/O construction, and avoids
+splitting `GitHubPullRequestAnalysisService` into a read/write pair for
+one new router, which would have been a larger change than spec §1
+sanctions.
+
 ## ADR-068 — `json`, not `orjson`, for event serialization even though `orjson` is an existing declared dependency (2026-09-15)
 
 `app/events/envelope.py` needs deterministic (sorted-key) JSON

@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface: 255 255 255;
+  --surface-raised: 255 255 255;
+  --surface-sunken: 244 245 247;
+  --border: 226 229 233;
+  --ink: 23 27 33;
+  --ink-muted: 90 99 110;
+  --ink-faint: 148 156 166;
+  --accent: 37 99 235;
+  --pass: 22 163 74;
+  --warn: 217 119 6;
+  --block: 220 38 38;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface: 17 20 24;
+    --surface-raised: 24 27 33;
+    --surface-sunken: 12 14 18;
+    --border: 42 47 56;
+    --ink: 236 238 241;
+    --ink-muted: 158 166 176;
+    --ink-faint: 108 116 128;
+    --accent: 96 145 255;
+    --pass: 74 222 128;
+    --warn: 250 176 5;
+    --block: 248 113 113;
+  }
+}
+
+:root[data-theme="dark"] {
+  --surface: 17 20 24;
+  --surface-raised: 24 27 33;
+  --surface-sunken: 12 14 18;
+  --border: 42 47 56;
+  --ink: 236 238 241;
+  --ink-muted: 158 166 176;
+  --ink-faint: 108 116 128;
+  --accent: 96 145 255;
+  --pass: 74 222 128;
+  --warn: 250 176 5;
+  --block: 248 113 113;
+}
+
+body {
+  background: rgb(var(--surface-sunken));
+  color: rgb(var(--ink));
+}

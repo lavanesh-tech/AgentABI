@@ -480,9 +480,77 @@ to complete verification before starting Phase 10.
 
 ## Phase 13 — Kafka Event Pipeline: COMPLETE
 
-## Phase 14 — Frontend Dashboard: NEXT
+## Phase 14 — Frontend Dashboard: COMPLETE
+
+## Phase 15 — OpenTelemetry: NEXT
 
 Gemini (Phase 9) remains SKIPPED/OPTIONAL.
+
+## Phase 14 — Frontend Dashboard: COMPLETE (detail)
+
+Adds `frontend/` — a standalone Next.js 14 (App Router) + TypeScript
+(strict) + Tailwind + TanStack Query + React Flow + Recharts dashboard,
+independently runnable from the backend. Covers every route in spec §7
+(`/login`, `/dashboard`, `/projects`, `/projects/[projectId]`,
+`/projects/[projectId]/components`, `/compatibility`, `/graph`,
+`/trajectories`, `/replays`, `/differential`, `/risk`, `/github`,
+`/audit`), a centralized typed API client (`lib/api-client.ts`) parsing
+the standardized error envelope and handling 401 globally, one
+TanStack Query hook module per implemented backend resource
+(`features/*/hooks.ts`), and RBAC-aware UI via a frontend mirror of
+`app/authz/permissions.py` (`lib/permissions.ts` — UX only, backend
+remains authoritative). The dependency graph and blast-radius screen
+renders real Phase 4 graph data via React Flow — no relationship or
+impact tier is computed client-side. The risk screen is deliberately
+the most prominent: PASS/WARN/BLOCK, score, threshold visualization,
+hard-block indication, and the full rule-contribution trace, labeled
+"Deterministic Deployment Risk"; the optional OpenAI explanation
+(spec §24) is a manual "Generate AI Explanation" action, never
+auto-called. See docs/ARCHITECTURE.md's Phase 14 section and
+docs/DECISIONS.md ADR-069/ADR-070 for the OAuth token-handling and
+PR-analysis read-endpoint decisions.
+
+Backend gap closed before the frontend could be built honestly (spec
+§1's "do not assume endpoints exist"): a subagent-assisted inventory of
+every implemented API confirmed no read endpoint existed for
+`GitHubPullRequestAnalysis` (written by the Phase 12/13 webhook
+pipeline, never exposed over HTTP). Added the minimum necessary
+surface — `GET /projects/{project_id}/github/pr-analyses` (paginated,
+optional `pull_request_number` filter) and `GET .../{analysis_id}` —
+following the existing repository/service/router layering, with no
+change to the orchestration service's write path. `docs/DECISIONS.md`
+ADR-071 has the full rationale.
+
+Same sandbox network restriction as every backend phase, now also
+covering the frontend: `npm install` returns `403 Forbidden` from the
+registry (confirmed directly — same restriction class as PyPI/PyPI-hosted
+`httpx`/`fastapi`/etc. throughout this project), so `npm run
+lint`/`typecheck`/`test`/`build` and Playwright could not be executed
+here. Every frontend/backend file is written and, for the backend
+addition, `ruff format --check`/`ruff check`/`python3.12 -m py_compile`
+clean; the new `GitHubPRAnalysisRepository.list_by_project` and
+`GitHubPullRequestAnalysisService.list_analyses`/`get_analysis` tests
+in `tests/test_github_pr_analysis_service.py` are written/`py_compile`-
+clean, not pytest-executed (need SQLAlchemy/asyncpg, unavailable here —
+same restriction documented for every integration test in this
+project). Vitest unit tests (`frontend/tests/*.test.ts(x)`) cover API
+error-envelope parsing (400/422/429 mapping, `NetworkError` on fetch
+failure), PASS/WARN/BLOCK and hard-block rendering, rule-contribution
+rendering, RBAC permission mapping (MEMBER/ADMIN/OWNER), and the
+structured-diff component; a Playwright smoke suite
+(`frontend/e2e/smoke.spec.ts`) covers login rendering, the
+unauthenticated-redirect, an authenticated dashboard render, and a
+mocked PASS/WARN/BLOCK risk render — written, not executed, per the
+same restriction. Visual verification (spec §46) was skipped — the
+dev server could not be started without a working `npm install`.
+`docker compose config` (with the new `web` service added) validated
+cleanly. `docker build ./frontend` could not run — the `docker` CLI is
+present in this sandbox but its daemon is not running here
+(`Cannot connect to the Docker daemon at unix:///var/run/docker.sock`).
+
+Run `cd frontend && npm install && npm run lint && npm run typecheck &&
+npm test && npm run build` locally to complete frontend verification
+before starting Phase 15.
 
 ## Phase 13 — Kafka Event Pipeline: COMPLETE (detail)
 
