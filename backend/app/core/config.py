@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
 
     # --- GitHub integration -------------------------------------------------
+    # `github_webhook_secret` (Security Phase E): environment-only, no
+    # real value ships here or in .env.example — empty means "webhook
+    # processing not configured" (`GitHubWebhookNotConfigured`, 503).
+    # Never logged (app/trajectory/redaction.py's key set covers
+    # `webhook_secret`), never serialized in any response model, and
+    # compatible with a future AWS Secrets Manager-backed env value —
+    # this field never changes shape, only where the environment gets
+    # its value from.
     github_webhook_secret: str | None = None
     github_app_id: str | None = None
     github_private_key: str | None = None

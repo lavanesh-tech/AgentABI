@@ -396,3 +396,43 @@ was needed — Phase D adds no schema changes.
 
 Run `make install && make lint && make typecheck && make test` locally
 to complete verification before starting Security Phase E.
+
+## Security Phase E — GitHub Webhook Security and Audit (2026-09-14)
+
+`POST /api/v1/github/webhook`: HMAC-SHA256 signature verification over
+raw body bytes (ADR-047), delivery-id idempotency with SHA-256
+payload-hash conflict detection (ADR-048), rate limited and
+request-size-protected but unauthenticated by AgentABI JWT. Persistent
+append-only `audit_events` (immutable via DB trigger, tenant-scoped,
+redacted metadata — ADR-049) with an OWNER/ADMIN-only read API at
+`GET /api/v1/organizations/{organization_id}/audit-events`. Audit
+emission wired at two centralized points: GitHub OAuth login success/
+failure, and authorization denials. Does not implement GitHub PR/check
+processing, compatibility-scan triggering from webhooks, or release
+gate logic — deferred to a later product phase (Phase 12).
+`PROJECT_CREATED`/`SCAN_TRIGGERED`/`REPLAY_TRIGGERED` exist in the
+audit taxonomy but are not yet emitted — scoped out this phase (see
+ADR-049).
+
+Same sandbox restriction as every prior phase (no SQLAlchemy/FastAPI/
+httpx). New pure modules (`app/github/webhook_signature.py`,
+`app/audit/actions.py`) ran for real via `pytest --noconftest`: **11/11
+new pure unit tests passed**; combined with the full existing pure
+suite (one existing test updated for the new `AUDIT_READ` permission),
+**237/237 passed**, confirming no regression. Migration 0007
+(`audit_events`, `github_webhook_deliveries`) was verified against a
+real local Postgres via raw `psql` (mirrors ADR-008's pattern, since
+SQLAlchemy isn't installable here): unique-constraint duplicate
+rejection, audit append, immutability trigger blocking both UPDATE and
+DELETE, and the tenant-scoped `(organization_id, created_at)` index —
+all confirmed live, then the scratch database was dropped. Five
+integration test files (webhook idempotency, audit service, audit API,
+webhook API, plus the existing Phase D suites) are written and
+`py_compile`-clean but not pytest-executed — need SQLAlchemy/FastAPI/
+httpx. `ruff format --check`/`ruff check` clean; `python3.12 -m
+py_compile` clean across `app`/`tests`/`alembic`; `mypy` fails on the
+same pre-existing `pydantic.mypy` error as every prior phase.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Security Phase F.

@@ -23,6 +23,8 @@ _ENGINEERING_WRITES = {
     Permission.TRAJECTORY_WRITE,
     Permission.REPLAY_EXECUTE,
     Permission.GRAPH_WRITE,
+    # Security Phase E spec §17: ADMIN may read the audit trail.
+    Permission.AUDIT_READ,
 }
 
 _GOVERNANCE = {Permission.MEMBERSHIP_MANAGE, Permission.ORG_MANAGE}

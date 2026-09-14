@@ -1224,3 +1224,75 @@ Security Phase E's planned GitHub webhook HMAC verification, which needs
 the exact raw bytes GitHub sent. This middleware never buffers or
 rewrites the body beyond counting, so the raw stream stays verifiable
 downstream in Phase E.
+
+## ADR-047 — GitHub webhook trust boundary: verify raw bytes, then and only then trust anything (2026-09-14)
+
+`POST /api/v1/github/webhook` is unauthenticated by AgentABI JWT — GitHub
+proves itself via `X-Hub-Signature-256` instead. Verification
+(`app/github/webhook_signature.py`) runs HMAC-SHA256 over the exact raw
+request body bytes (`await request.body()`, never a re-serialized JSON
+representation) using `hmac.compare_digest` for constant-time
+comparison, and rejects a missing header, wrong prefix, malformed hex,
+or wrong-length digest the same uniform way an invalid signature is
+rejected (mirrors `InvalidToken`'s ADR-032 precedent — no oracle for
+which check failed). Only after verification succeeds does anything
+about the request — headers (`X-GitHub-Delivery`/`X-GitHub-Event`) or
+payload — get trusted. Phase D's `RequestSizeLimitMiddleware` only
+counts streamed bytes without altering them, so it does not interfere
+with this raw-body requirement, and this route's own downstream JSON
+parse (`json.loads`) is only a well-formedness check — no field of the
+parsed payload is trusted or persisted yet (product processing is
+Phase 12).
+
+## ADR-048 — Delivery idempotency: unique `delivery_id`, SHA-256 payload-hash conflict detection (2026-09-14)
+
+`github_webhook_deliveries.delivery_id` (GitHub's `X-GitHub-Delivery`)
+has a database unique constraint — the idempotency backstop, not just an
+application pre-check, so two concurrent redeliveries can never both
+insert (same IntegrityError-retry pattern as
+`TrajectoryRecorderService.start_trajectory`). A redelivery with an
+identical SHA-256 payload hash is treated as an idempotent no-op success
+(spec §9); a redelivery reusing the same id with a *different* hash is
+a `WebhookDeliveryConflict` (409) — GitHub does not reuse delivery ids
+for different payloads, so this is a genuine anomaly, not a retry. The
+full payload is deliberately not stored, only its hash and event-type
+metadata (spec §8) — this table is a delivery ledger, not a payload
+archive.
+
+## ADR-049 — Audit events: append-only via DB trigger, tenant-scoped by organization_id, OWNER/ADMIN-only read (2026-09-14)
+
+`AuditEvent` (`app/models/audit_event.py`) has no update/delete method
+on `AuditService`/`AuditEventRepository`, and migration 0007 adds a
+database trigger blocking both UPDATE and DELETE unconditionally (same
+posture as `TrajectoryEvent`/`ReplayStep`, extended here to also cover
+DELETE — ADR-XXX precedent, `docs/DECISIONS.md` migration 0003/0004).
+`organization_id`/`actor_user_id` use `ON DELETE SET NULL`, not the
+`CASCADE` every tenant-scoped table elsewhere uses, so deleting an
+organization or user can never silently delete the record of what it
+did. `Permission.AUDIT_READ` (`app/authz/permissions.py`) is granted to
+ADMIN and OWNER, denied to MEMBER — the same privileged-engineering-
+action bucket as `SCAN_EXECUTE`/`REPLAY_EXECUTE`. `GET /api/v1/
+organizations/{organization_id}/audit-events` is always tenant-scoped
+by the path's `organization_id` via `require_organization_permission`
+(no "list all organizations" variant exists). Metadata is redacted
+through the same `sanitize()` every trajectory event payload uses,
+extended in Phase D to also cover `client_secret`/`jwt_secret`/
+`webhook_secret` — callers are still expected to pass allow-listed
+fields, not arbitrary request dumps (spec §14).
+
+Two centralized audit-emission points were wired this phase, deliberately
+avoiding a broader cross-cutting rewrite: `GitHubOAuthService` records
+`LOGIN_SUCCESS`/`LOGIN_FAILURE` (state-invalid and authorization-denied
+cases only — never a provider token or OAuth state value), and
+`AuthorizationService._record_denial` records `AUTHORIZATION_DENIED`
+whenever `PermissionDenied` is raised (membership exists but lacks the
+permission) — not for the 404 cross-tenant cases, which stay
+indistinguishable-from-not-found by design (ADR-042). Both commit
+immediately before raising, since `get_db_session`'s automatic rollback
+on exception would otherwise discard the audit write along with it.
+`PROJECT_CREATED`/`SCAN_TRIGGERED`/`REPLAY_TRIGGERED` audit actions
+exist in the taxonomy but are not yet emitted anywhere — wiring them
+requires threading actor/organization context into services that don't
+currently take it, out of scope for this phase's token budget; left as
+a scoped TODO for a future pass rather than a partial/inconsistent
+cross-cutting change.

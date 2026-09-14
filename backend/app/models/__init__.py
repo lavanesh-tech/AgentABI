@@ -4,10 +4,12 @@ have been imported) — Alembic's `env.py` imports this package for exactly
 that reason, and so does anything that needs `Base.metadata.tables`.
 """
 
+from app.models.audit_event import AuditEvent
 from app.models.base import Base
 from app.models.compatibility_scan import CompatibilityScan
 from app.models.component import Component
 from app.models.component_version import ComponentVersion
+from app.models.github_webhook_delivery import GitHubWebhookDelivery
 from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember, OrganizationRole
 from app.models.project import Project
@@ -19,10 +21,12 @@ from app.models.trajectory_event import TrajectoryEvent
 from app.models.user import User
 
 __all__ = [
+    "AuditEvent",
     "Base",
     "CompatibilityScan",
     "Component",
     "ComponentVersion",
+    "GitHubWebhookDelivery",
     "Organization",
     "OrganizationMember",
     "OrganizationRole",

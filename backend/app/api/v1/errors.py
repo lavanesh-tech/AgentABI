@@ -31,6 +31,7 @@ from app.domain.exceptions import (
     GitHubIdentityLookupFailed,
     GitHubOAuthNotConfigured,
     GitHubTokenExchangeFailed,
+    GitHubWebhookNotConfigured,
     GraphUnavailable,
     InvalidCompatibilityComparison,
     InvalidComponentContent,
@@ -39,6 +40,7 @@ from app.domain.exceptions import (
     InvalidTrajectoryEvent,
     MalformedGitHubIdentity,
     MissingAuthorizationCode,
+    MissingWebhookDeliveryId,
     NotFoundError,
     OAuthStateInvalid,
     OAuthStateStoreUnavailable,
@@ -52,6 +54,7 @@ from app.domain.exceptions import (
     SchemaNormalizationError,
     TrajectoryPayloadTooLarge,
     UnsupportedCompatibilityType,
+    WebhookSignatureError,
 )
 
 logger = structlog.get_logger(__name__)
@@ -70,6 +73,7 @@ INTERNAL_ERROR = "INTERNAL_ERROR"
 SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
 INVALID_REQUEST = "INVALID_REQUEST"
 UPSTREAM_ERROR = "UPSTREAM_ERROR"
+INVALID_WEBHOOK_SIGNATURE = "INVALID_WEBHOOK_SIGNATURE"
 
 # Domain exception class -> (status_code, error_code). Order doesn't matter
 # for dispatch (FastAPI/Starlette pick the most specific registered
@@ -102,6 +106,9 @@ _DOMAIN_ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
     OrganizationAccessDenied: (status.HTTP_404_NOT_FOUND, RESOURCE_NOT_FOUND),
     ProjectAccessDenied: (status.HTTP_404_NOT_FOUND, RESOURCE_NOT_FOUND),
     RateLimiterUnavailable: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
+    WebhookSignatureError: (status.HTTP_401_UNAUTHORIZED, INVALID_WEBHOOK_SIGNATURE),
+    GitHubWebhookNotConfigured: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
+    MissingWebhookDeliveryId: (status.HTTP_400_BAD_REQUEST, INVALID_REQUEST),
     AgentABIError: (status.HTTP_400_BAD_REQUEST, INVALID_REQUEST),
 }
 

@@ -1184,3 +1184,30 @@ verification remains unaffected.
 `app/trajectory/redaction.py`'s `DEFAULT_SENSITIVE_KEYS` now also covers
 `client_secret`/`jwt_secret`/`webhook_secret` (extended in place, not
 duplicated) for any future structured-log redaction that reuses it.
+
+### GitHub webhook security and audit logging (Security Phase E)
+
+`POST /api/v1/github/webhook` verifies `X-Hub-Signature-256` (HMAC-
+SHA256, constant-time) over the exact raw body bytes before trusting
+anything else about the request — see ADR-047. `GitHubWebhookService`
+(`app/services/webhook_service.py`) persists a `GitHubWebhookDelivery`
+row keyed by GitHub's `X-GitHub-Delivery` id (unique constraint,
+SHA-256 payload-hash idempotency/conflict detection — ADR-048) and does
+not yet trigger any product pipeline (Phase 12) — this phase only
+trusts and records inbound deliveries. The route is unauthenticated by
+AgentABI JWT but still rate-limited by client identity and covered by
+Phase D's global request-size middleware, which is designed not to
+interfere with raw-body signature verification.
+
+`AuditEvent` (`app/models/audit_event.py`) is an append-only security
+audit trail — immutable at the database level (migration 0007 blocks
+UPDATE and DELETE), tenant-scoped by nullable `organization_id`
+(`ON DELETE SET NULL`, never `CASCADE`), redacted metadata via the
+existing `app/trajectory/redaction.sanitize()`. `AuditService`
+(`app/services/audit_service.py`) is the single append/query surface;
+`GET /api/v1/organizations/{organization_id}/audit-events`
+(`Permission.AUDIT_READ`, OWNER/ADMIN only) is its read API. See
+ADR-049 for the immutability/tenant-scoping/read-authorization design
+and the two centralized emission points wired this phase
+(`GitHubOAuthService` login events, `AuthorizationService` authorization
+denials).
