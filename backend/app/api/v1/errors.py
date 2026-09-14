@@ -17,8 +17,11 @@ from app.domain.exceptions import (
     InvalidCompatibilityComparison,
     InvalidComponentContent,
     InvalidDependencyRelationship,
+    InvalidReplaySubstitution,
     InvalidTrajectoryEvent,
     NotFoundError,
+    ReplayExecutionFailed,
+    ReplayExecutorUnavailable,
     SchemaNormalizationError,
     TrajectoryPayloadTooLarge,
     UnsupportedCompatibilityType,
@@ -81,6 +84,24 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(TrajectoryPayloadTooLarge)
     async def handle_trajectory_payload_too_large(
         request: Request, exc: TrajectoryPayloadTooLarge
+    ) -> JSONResponse:
+        return _error_response(422, str(exc))
+
+    @app.exception_handler(InvalidReplaySubstitution)
+    async def handle_invalid_replay_substitution(
+        request: Request, exc: InvalidReplaySubstitution
+    ) -> JSONResponse:
+        return _error_response(422, str(exc))
+
+    @app.exception_handler(ReplayExecutorUnavailable)
+    async def handle_replay_executor_unavailable(
+        request: Request, exc: ReplayExecutorUnavailable
+    ) -> JSONResponse:
+        return _error_response(503, str(exc))
+
+    @app.exception_handler(ReplayExecutionFailed)
+    async def handle_replay_execution_failed(
+        request: Request, exc: ReplayExecutionFailed
     ) -> JSONResponse:
         return _error_response(422, str(exc))
 

@@ -11,7 +11,7 @@ every phase.
 | 4 | Neo4j dependency graph | ✅ Done (see caveat in DECISIONS.md ADR-021) |
 | 5 | Compatibility / schema-diff engine | ✅ Done (see caveat in DECISIONS.md ADR-022) |
 | 6 | Trajectory recording | ✅ Done (see caveat in DECISIONS.md ADR-032) |
-| 7 | Replay engine | ⬜ Not started |
+| 7 | Replay engine | ✅ Done (see caveat in DECISIONS.md ADR-036) |
 | 8 | OpenAI provider | ⬜ Not started |
 | 9 | Gemini provider | ⬜ Not started |
 | 10 | Differential analyzer | ⬜ Not started |
@@ -210,3 +210,38 @@ httpx to actually run through `pytest` — see DECISIONS.md ADR-032.
 Run `make install && make lint && make typecheck && make test &&
 alembic upgrade head` locally to complete verification before starting
 Phase 7.
+
+## Phase 7 notes
+
+Deterministic Replay Engine: a dataclass/`Protocol`-only `app/replay/`
+package (`models.py`, `transitions.py`, `planner.py`, `executor.py`)
+plus new `replay_runs`/`replay_steps` tables (`0005_replays.py`).
+`build_replay_plan()` classifies each historical event as reused,
+substituted (baseline->candidate, historical arguments preserved),
+provider-required (model events — no adapter until Phase 8/9), or
+skipped (a substituted call's superseded response), always in
+`sequence_number` order. `ReplayService` computes the plan once at
+creation, then `execute_replay()` inserts each `ReplayStep` exactly once
+already in its final status — never insert-then-update — via a pluggable
+`ExecutorRegistry` that ships empty in production (no executor wired
+means `ReplayExecutorUnavailable`, never a fabricated result).
+`FakeReplayExecutor` proves the orchestration in tests. Idempotency
+mirrors Phase 6's pattern exactly. Does not implement replay execution
+against real providers/tools (later phases) or behavioral differencing
+(Phase 10) — see DECISIONS.md ADR-033 through ADR-035.
+
+Same sandbox restriction as every prior phase. `app/replay/` ran for
+real via `pytest --noconftest`: **25/25 new pure unit tests passed**
+(incl. the spec's exact 7-event checkout acceptance case — v6 invoked
+with v5's historical arguments, original trajectory untouched);
+combined with Phase 5/6's 124, **149/149 passed**. Migration 0005
+verified by direct DDL against real Postgres 16: the acceptance-case
+plan, both immutability postures (trigger on `replay_steps`, none on
+`replay_runs`), sequence/idempotency-key uniqueness, and cascade delete
+from `trajectories`. `test_replay_service.py` and `test_replays_api.py`
+are written and `py_compile`-clean but not pytest-executed — see
+DECISIONS.md ADR-036.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Phase 8.
