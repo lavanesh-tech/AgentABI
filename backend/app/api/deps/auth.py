@@ -27,7 +27,11 @@ from app.domain.exceptions import AuthenticationRequired, DisabledUser, InvalidT
 from app.repositories.organization_member_repository import OrganizationMemberRepository
 from app.repositories.user_repository import UserRepository
 
-_bearer_scheme = HTTPBearer(auto_error=False, description="AgentABI JWT access token")
+_bearer_scheme = HTTPBearer(
+    auto_error=False,
+    bearerFormat="JWT",
+    description="AgentABI JWT access token (obtained via GitHub OAuth2 login).",
+)
 
 
 async def get_current_user(

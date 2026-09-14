@@ -54,7 +54,13 @@ class AuthMeResponse(BaseModel):
         )
 
 
-@router.get("/me", response_model=AuthMeResponse)
+@router.get(
+    "/me",
+    response_model=AuthMeResponse,
+    summary="Get the authenticated user",
+    description="Requires a Bearer AgentABI JWT. Returns the caller's identity and, "
+    "if the token carries organization context, their role in it.",
+)
 async def get_me(
     principal: Annotated[AuthenticatedPrincipal, Depends(get_current_user)],
 ) -> AuthMeResponse:
@@ -86,7 +92,13 @@ class GitHubCallbackResponse(BaseModel):
         )
 
 
-@router.get("/github/login", dependencies=[_RATE_AUTH])
+@router.get(
+    "/github/login",
+    dependencies=[_RATE_AUTH],
+    summary="Start GitHub OAuth2 login",
+    description="Public, no AgentABI JWT required. Redirects the browser to GitHub's "
+    "authorization page; not directly callable from an API client like Postman.",
+)
 async def github_login(
     service: Annotated[GitHubOAuthService, Depends(get_github_oauth_service)],
 ) -> RedirectResponse:
@@ -94,7 +106,14 @@ async def github_login(
     return RedirectResponse(url=start.authorization_url, status_code=302)
 
 
-@router.get("/github/callback", response_model=GitHubCallbackResponse, dependencies=[_RATE_AUTH])
+@router.get(
+    "/github/callback",
+    response_model=GitHubCallbackResponse,
+    dependencies=[_RATE_AUTH],
+    summary="GitHub OAuth2 callback",
+    description="Public, no AgentABI JWT required — GitHub redirects here after login. "
+    "Returns the AgentABI JWT to use as the Bearer token on every other endpoint.",
+)
 async def github_callback(
     service: Annotated[GitHubOAuthService, Depends(get_github_oauth_service)],
     code: Annotated[str | None, Query()] = None,

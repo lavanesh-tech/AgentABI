@@ -75,6 +75,8 @@ ServiceDep = Annotated[ProjectService, Depends(get_project_service)]
     response_model=ProjectResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[_ORG_CREATE],
+    summary="Create a project",
+    description="Requires ADMIN or OWNER in the organization.",
 )
 async def create_project(
     organization_id: uuid.UUID, payload: ProjectCreateRequest, service: ServiceDep
@@ -88,6 +90,8 @@ async def create_project(
     "/organizations/{organization_id}/projects",
     response_model=ProjectListResponse,
     dependencies=[_ORG_READ],
+    summary="List projects in an organization",
+    description="Requires any membership (OWNER/ADMIN/MEMBER) in the organization.",
 )
 async def list_projects(
     organization_id: uuid.UUID,
@@ -104,13 +108,22 @@ async def list_projects(
     )
 
 
-@router.get("/projects/{project_id}", response_model=ProjectResponse, dependencies=[_PROJECT_READ])
+@router.get(
+    "/projects/{project_id}",
+    response_model=ProjectResponse,
+    dependencies=[_PROJECT_READ],
+    summary="Get a project",
+)
 async def get_project(project_id: uuid.UUID, service: ServiceDep) -> Project:
     return await service.get_project(project_id)
 
 
 @router.patch(
-    "/projects/{project_id}", response_model=ProjectResponse, dependencies=[_PROJECT_UPDATE]
+    "/projects/{project_id}",
+    response_model=ProjectResponse,
+    dependencies=[_PROJECT_UPDATE],
+    summary="Update a project",
+    description="Requires ADMIN or OWNER in the project's organization.",
 )
 async def update_project(
     project_id: uuid.UUID, payload: ProjectUpdateRequest, service: ServiceDep

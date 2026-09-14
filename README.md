@@ -29,3 +29,17 @@ make test          # pytest
 
 `GET /api/v1/health` reports process liveness. `GET /api/v1/ready` reports
 whether Postgres is actually reachable (503 if not).
+
+## Security & API
+
+Access to non-public APIs requires an AgentABI JWT obtained via GitHub
+OAuth2 (`/api/v1/auth/github/login`); authorization is RBAC
+(OWNER/ADMIN/MEMBER) reloaded from the database per request and scoped to
+organizations/projects (tenant isolation — cross-tenant access returns 404,
+not 403). APIs are Pydantic-validated, Redis-rate-limited, and return a
+standardized JSON error envelope. Inbound GitHub webhooks are verified via
+HMAC-SHA256 (`X-Hub-Signature-256`) rather than a JWT, and admin actions are
+recorded in an append-only audit log. Swagger UI is at `/docs` (Authorize
+with a Bearer JWT); a Postman collection is in `postman/` — see
+`docs/POSTMAN.md`. Full design in `docs/ARCHITECTURE.md`'s Security
+Architecture Overview and `docs/SECURITY_VERIFICATION.md`.
