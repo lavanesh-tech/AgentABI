@@ -1211,3 +1211,84 @@ ADR-049 for the immutability/tenant-scoping/read-authorization design
 and the two centralized emission points wired this phase
 (`GitHubOAuthService` login events, `AuthorizationService` authorization
 denials).
+
+## Security Architecture Overview (consolidated, Security Phase F)
+
+A short summary of Security Phases A–E for anyone evaluating the
+system without reading every phase section above.
+
+**Authentication flow.** A user authenticates only via GitHub OAuth2
+(`/api/v1/auth/github/login` → GitHub consent → `/api/v1/auth/github/
+callback`). The callback exchanges GitHub's code, resolves or creates
+an AgentABI `User` from the returned GitHub identity, and issues an
+AgentABI-signed HS256 JWT (stdlib-only, ADR-037) — GitHub's own access
+token is never persisted (ADR from Phase B). The `state` parameter is
+Redis-backed and one-use (ADR-039) to prevent CSRF/replay of the OAuth
+flow.
+
+**Authorization flow.** Every protected route depends on
+`get_current_user` (validates the JWT: signature, issuer, audience,
+expiration, and that the user still exists/is active) and then, for
+org/project-scoped routes, `require_organization_permission` /
+`require_project_permission` (`app/api/deps/authz.py`). Role is never
+trusted from the JWT — it is reloaded from `organization_members` on
+every request (ADR-038), so a role downgrade or membership removal
+takes effect immediately. `Permission` (`app/authz/permissions.py`)
+maps OWNER/ADMIN/MEMBER to allowed actions. A resource in an
+organization/project the caller has no membership in returns 404, not
+403 (ADR-042), so cross-tenant existence is never leaked; a same-
+tenant permission denial returns 403.
+
+**API protection.** All request/response bodies are Pydantic models
+(validation + typed serialization — no field is ever exposed that
+isn't explicitly on a response model, which is how secrets stay out of
+API responses). Mutating routes are rate-limited via fixed-window
+Redis counters, fail-closed on Redis failure (ADR-043), keyed by user
+id when authenticated else trusted-proxy-aware client IP (ADR-044).
+CORS is configured via `Settings`; a standardized JSON error envelope
+(`{"error": {"code", "message", "request_id"}}`) is used for every
+4xx/5xx (ADR-045); a raw-ASGI request-size limit middleware rejects
+oversized bodies with 413 before buffering (ADR-046); standard
+security headers are set globally.
+
+**GitHub webhook trust.** `POST /api/v1/github/webhook` is public (no
+AgentABI JWT — GitHub can't obtain one) but verifies
+`X-Hub-Signature-256` as HMAC-SHA256 over the *raw* request body using
+constant-time comparison before trusting anything else (ADR-047).
+Each delivery's `X-GitHub-Delivery` id is stored with a unique
+constraint plus a SHA-256 payload-hash for idempotency/conflict
+detection (ADR-048).
+
+**Audit logging.** `AuditEvent` rows are append-only (a DB trigger
+blocks UPDATE/DELETE), tenant-scoped by nullable `organization_id`,
+with sensitive metadata redacted through the same sanitizer trajectory
+events use. Read access is OWNER/ADMIN only (ADR-049).
+
+**Swagger/OpenAPI.** FastAPI derives the OpenAPI `security` schema
+automatically by walking each route's dependency graph — no route
+manually declares a security requirement. `HTTPBearer(bearerFormat=
+"JWT")` is the one shared scheme (`app/api/deps/auth.py`); Swagger UI's
+Authorize button accepts a raw JWT. Public routes (health/ready, OAuth
+login/callback, the GitHub webhook) depend on no auth dependency and
+so correctly show no security requirement. See `tests/
+test_openapi_security.py`.
+
+**Postman.** `postman/AgentABI.postman_collection.json` and
+`postman/AgentABI.local.postman_environment.json.example` cover every
+implemented route with collection-level Bearer auth and per-request
+`noauth` overrides for the public endpoints. See `docs/POSTMAN.md`.
+
+### Security Phase F: Developer/API Tooling + Final Verification
+
+Phase F added no new backend behavior. It made existing security
+correctly *visible*: `bearerFormat="JWT"` on the shared `HTTPBearer`
+scheme, `summary`/`description` on key routes, a shared
+`COMMON_ERROR_RESPONSES` dict (`app/api/v1/errors.py`) documenting the
+Phase D error envelope for 400/401/403/404/409/413/422/429/500 via
+`include_router(..., responses=...)`, the Postman collection/
+environment above, `docs/POSTMAN.md`, this consolidated section, and
+`tests/test_openapi_security.py` (asserts the bearer scheme, that
+protected/public routes are correctly (un)secured, and that no secret
+setting value leaks into the generated schema). See
+`docs/SECURITY_VERIFICATION.md` for the final phase-by-phase
+verification status.

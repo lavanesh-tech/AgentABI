@@ -20,6 +20,7 @@ import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from app.domain.exceptions import (
     AgentABIError,
@@ -110,6 +111,37 @@ _DOMAIN_ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
     GitHubWebhookNotConfigured: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
     MissingWebhookDeliveryId: (status.HTTP_400_BAD_REQUEST, INVALID_REQUEST),
     AgentABIError: (status.HTTP_400_BAD_REQUEST, INVALID_REQUEST),
+}
+
+
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+    request_id: str
+
+
+class ErrorEnvelope(BaseModel):
+    """The typed shape of every error response this API returns
+    (Security Phase D). Used only for OpenAPI documentation (spec §6/
+    Phase F §6) — the actual response is still built by `_envelope()`
+    below, never rendered through this model at runtime."""
+
+    error: ErrorDetail
+
+
+# Attached to router `responses=` (spec §6/Phase F §5) so Swagger shows
+# the standardized envelope for common failure statuses without
+# repeating a `responses={...}` dict on every individual route.
+COMMON_ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
+    400: {"model": ErrorEnvelope, "description": "Invalid request"},
+    401: {"model": ErrorEnvelope, "description": "Authentication required or invalid"},
+    403: {"model": ErrorEnvelope, "description": "Authorization denied"},
+    404: {"model": ErrorEnvelope, "description": "Resource not found"},
+    409: {"model": ErrorEnvelope, "description": "Conflict with existing state"},
+    413: {"model": ErrorEnvelope, "description": "Request body too large"},
+    422: {"model": ErrorEnvelope, "description": "Validation error"},
+    429: {"model": ErrorEnvelope, "description": "Rate limit exceeded"},
+    500: {"model": ErrorEnvelope, "description": "Internal server error"},
 }
 
 

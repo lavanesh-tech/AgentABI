@@ -45,6 +45,10 @@ class WebhookAcceptedResponse(BaseModel):
     response_model=WebhookAcceptedResponse,
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[_RATE_WEBHOOK],
+    summary="Receive a GitHub webhook delivery",
+    description="Public — no AgentABI JWT. GitHub authenticates via "
+    "X-Hub-Signature-256 (HMAC-SHA256 over the raw body) instead. Requires "
+    "X-Hub-Signature-256, X-GitHub-Delivery, and X-GitHub-Event headers.",
 )
 async def github_webhook(
     request: Request,

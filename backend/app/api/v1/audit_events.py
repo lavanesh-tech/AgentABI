@@ -65,7 +65,14 @@ class AuditEventListResponse(BaseModel):
     page_size: int
 
 
-@router.get("", response_model=AuditEventListResponse, dependencies=[_READ])
+@router.get(
+    "",
+    response_model=AuditEventListResponse,
+    dependencies=[_READ],
+    summary="List an organization's audit trail",
+    description="Requires ADMIN or OWNER in the organization; MEMBER is denied. "
+    "Always scoped to the organization_id in the path.",
+)
 async def list_audit_events(
     organization_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db_session)],
