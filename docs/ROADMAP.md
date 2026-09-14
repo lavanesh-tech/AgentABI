@@ -436,3 +436,34 @@ same pre-existing `pydantic.mypy` error as every prior phase.
 Run `make install && make lint && make typecheck && make test &&
 alembic upgrade head` locally to complete verification before starting
 Security Phase F.
+
+## Phase 8 — OpenAI Provider Integration: COMPLETE
+
+## Phase 9 — Gemini Provider Integration: SKIPPED / OPTIONAL
+
+## Phase 10 — Differential Analyzer: NEXT
+
+Adds `app/llm/`, `app/providers/{openai_provider,fake_provider}.py`,
+`app/services/explanation_service.py`, `app/api/deps/llm.py`, and one
+endpoint: `POST .../compatibility/scans/{scan_id}/explain`. OpenAI-only
+project decision (Gemini intentionally not implemented — see
+docs/DECISIONS.md ADR-050); the `LLMProvider` Protocol keeps the
+architecture ready for another provider without a rewrite. See
+docs/ARCHITECTURE.md's Phase 8 section for the full design and
+docs/DECISIONS.md ADR-050/051/052.
+
+Same sandbox restriction as every prior phase: `openai` (like fastapi/
+sqlalchemy) isn't installable here, and `pytest-asyncio` also isn't
+installable, so none of this project's `async def test_*` functions run
+in this sandbox regardless of phase. Pure, synchronous logic ran for
+real this phase: `app/llm/bounding.py`'s truncation/clipping rules, and
+an AST-based architectural-invariant test proving no deterministic
+package imports `openai` and that `openai` is imported nowhere outside
+`app/providers/openai_provider.py` — **8/8 passed**. `ruff format
+--check`/`ruff check` clean; `python3.12 -m py_compile` clean across
+`app`/`tests`. `docker compose config` and the migration chain were not
+re-checked this phase (no schema change — Phase 8 added no tables).
+
+Run `make install && make lint && make typecheck && make test` locally
+(with a real `OPENAI_API_KEY` if you want to exercise the live endpoint)
+to complete verification before starting Phase 10.

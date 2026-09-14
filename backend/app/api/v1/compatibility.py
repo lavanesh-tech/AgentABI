@@ -15,13 +15,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.authz import require_project_permission
+from app.api.deps.llm import get_llm_provider
 from app.api.deps.rate_limit import rate_limit_by_user
 from app.authz.permissions import Permission
 from app.compatibility.models import Classification, CompatibilityStatus, Severity
 from app.core.config import get_settings
 from app.core.database import get_db_session
+from app.llm.provider import LLMProvider
 from app.models.compatibility_scan import CompatibilityScan
 from app.services.compatibility_service import CompatibilityService
+from app.services.explanation_service import ExplanationService
 
 router = APIRouter(prefix="/projects/{project_id}/compatibility", tags=["compatibility"])
 
@@ -152,6 +155,26 @@ class ScanListResponse(BaseModel):
     page_size: int
 
 
+class EvidenceReferenceResponse(BaseModel):
+    reference_id: str
+    note: str = ""
+
+
+class ExplanationResponseModel(BaseModel):
+    """API shape for `app.llm.models.ExplanationResponse` — deliberately
+    has no risk/decision field (spec §10). See
+    `docs/ARCHITECTURE.md`'s Security/LLM boundary section."""
+
+    summary: str
+    key_findings: list[str]
+    likely_impact: list[str]
+    remediation_steps: list[str]
+    evidence_references: list[EvidenceReferenceResponse]
+    limitations: list[str]
+    provider: str
+    model: str
+
+
 def get_compatibility_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> CompatibilityService:
@@ -159,6 +182,15 @@ def get_compatibility_service(
 
 
 ServiceDep = Annotated[CompatibilityService, Depends(get_compatibility_service)]
+
+
+def get_explanation_service(
+    provider: Annotated[LLMProvider, Depends(get_llm_provider)],
+) -> ExplanationService:
+    return ExplanationService(provider)
+
+
+ExplanationServiceDep = Annotated[ExplanationService, Depends(get_explanation_service)]
 
 
 @router.post(
@@ -209,3 +241,44 @@ async def get_scan_changes(
 ) -> list[ScanChangeResponse]:
     scan = await service.get_scan(project_id, scan_id)
     return [ScanChangeResponse.model_validate(c) for c in scan.changes]
+
+
+@router.post(
+    "/scans/{scan_id}/explain",
+    response_model=ExplanationResponseModel,
+    dependencies=[_EXECUTE, _RATE_SCAN],
+    summary="Explain a compatibility scan's changes in natural language",
+    description="Requires the same permission and rate-limit bucket as "
+    "triggering a scan (this calls OpenAI, which costs money). The "
+    "explanation is generated only from this scan's already-computed, "
+    "deterministic changes — the LLM never recalculates compatibility, "
+    "and its response cannot contain a risk score or a pass/warn/block "
+    "decision; those remain deterministic. Returns 503 if OPENAI_API_KEY "
+    "is not configured, 502/504 for upstream provider failures.",
+)
+async def explain_scan(
+    project_id: uuid.UUID,
+    scan_id: uuid.UUID,
+    service: ServiceDep,
+    explanation_service: ExplanationServiceDep,
+) -> ExplanationResponseModel:
+    scan = await service.get_scan(project_id, scan_id)
+    result = await explanation_service.explain_compatibility_changes(
+        subject=f"compatibility scan {scan_id} of component {scan.component_id}",
+        baseline_label=str(scan.baseline_version_id),
+        candidate_label=str(scan.candidate_version_id),
+        changes=list(scan.changes),
+    )
+    return ExplanationResponseModel(
+        summary=result.summary,
+        key_findings=list(result.key_findings),
+        likely_impact=list(result.likely_impact),
+        remediation_steps=list(result.remediation_steps),
+        evidence_references=[
+            EvidenceReferenceResponse(reference_id=r.reference_id, note=r.note)
+            for r in result.evidence_references
+        ],
+        limitations=list(result.limitations),
+        provider=result.provider,
+        model=result.model,
+    )
