@@ -17,6 +17,8 @@ from app.models.organization_member import OrganizationMember, OrganizationRole
 from app.models.project import Project
 from app.models.replay_run import ReplayRun
 from app.models.replay_step import ReplayStep
+from app.models.risk_assessment import RiskAssessmentRecord
+from app.models.risk_rule_result import RiskRuleResultRecord
 from app.models.scan_change import ScanChange
 from app.models.trajectory import Trajectory
 from app.models.trajectory_event import TrajectoryEvent
@@ -37,6 +39,8 @@ __all__ = [
     "Project",
     "ReplayRun",
     "ReplayStep",
+    "RiskAssessmentRecord",
+    "RiskRuleResultRecord",
     "ScanChange",
     "Trajectory",
     "TrajectoryEvent",

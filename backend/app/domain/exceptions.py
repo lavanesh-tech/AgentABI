@@ -658,6 +658,26 @@ class ReplayNotReadyForDifferential(ConflictError):
         self.status = status
 
 
+class RiskAssessmentNotFound(NotFoundError):
+    def __init__(self, assessment_id: Any) -> None:
+        super().__init__(f"Risk assessment {assessment_id} not found")
+        self.assessment_id = assessment_id
+
+
+class RiskAssessmentInputRequired(AgentABIError):
+    """Raised when a risk assessment is requested with neither a
+    `compatibility_scan_id` nor a `differential_report_id` (Phase 11
+    spec §23) — the engine can still evaluate an empty `RiskContext`
+    (spec §36), but the API refuses to persist a meaningless assessment
+    with no evidence to point back to. Mapped to HTTP 400: a request
+    shape problem, not a missing/conflicting resource."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "At least one of compatibility_scan_id or differential_report_id is required"
+        )
+
+
 class LLMExplanationFailed(LLMError):
     """Raised for a provider-reported failure that isn't a timeout or
     transport error — e.g. an authentication error, a rate limit from
