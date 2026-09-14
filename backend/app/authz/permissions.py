@@ -44,6 +44,8 @@ class Permission(enum.StrEnum):
     DIFFERENTIAL_EXECUTE = "differential:execute"
     RISK_READ = "risk:read"
     RISK_EXECUTE = "risk:execute"
+    GITHUB_INTEGRATION_READ = "github_integration:read"
+    GITHUB_INTEGRATION_MANAGE = "github_integration:manage"
 
 
 # MEMBER: least-privilege, read-only across every organization-scoped
@@ -63,6 +65,8 @@ _MEMBER_PERMISSIONS: frozenset[Permission] = frozenset(
         # Phase 11 spec §25: MEMBER may read risk assessments, same
         # read-only bucket as every other derived-evidence resource.
         Permission.RISK_READ,
+        # Phase 12 spec §34: MEMBER may read GitHub repository mappings.
+        Permission.GITHUB_INTEGRATION_READ,
     }
 )
 
@@ -88,6 +92,10 @@ _ADMIN_PERMISSIONS: frozenset[Permission] = _MEMBER_PERMISSIONS | frozenset(
         # engineering action, same bucket as DIFFERENTIAL_EXECUTE —
         # MEMBER never triggers one, only reads results.
         Permission.RISK_EXECUTE,
+        # Phase 12 spec §34: creating/deleting a GitHub repository
+        # mapping is a privileged engineering action, same bucket as
+        # RISK_EXECUTE/DIFFERENTIAL_EXECUTE.
+        Permission.GITHUB_INTEGRATION_MANAGE,
         # Security Phase E spec §17: ADMIN may read the organization's
         # audit trail (a privileged engineering/security action, same
         # bucket as SCAN_EXECUTE/REPLAY_EXECUTE) — only membership

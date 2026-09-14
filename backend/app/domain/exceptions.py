@@ -687,3 +687,80 @@ class LLMExplanationFailed(LLMError):
         super().__init__(f"LLM provider {provider!r} failed to produce an explanation: {detail}")
         self.provider = provider
         self.detail = detail
+
+
+class GitHubRepositoryNotMapped(NotFoundError):
+    """Raised when a webhook arrives for a `github_repository_id` with
+    no `GitHubRepositoryMapping` row (Phase 12 spec §7/§32) — resolution
+    is always server-side (this repository, looked up by GitHub's
+    immutable numeric id), never a project/org id trusted from the
+    webhook payload itself."""
+
+    def __init__(self, github_repository_id: Any) -> None:
+        super().__init__(f"GitHub repository {github_repository_id} is not mapped to a project")
+        self.github_repository_id = github_repository_id
+
+
+class GitHubRepositoryMappingNotFound(NotFoundError):
+    def __init__(self, mapping_id: Any) -> None:
+        super().__init__(f"GitHub repository mapping {mapping_id} not found")
+        self.mapping_id = mapping_id
+
+
+class DuplicateGitHubRepositoryMapping(ConflictError):
+    """Raised when a `github_repository_id` is already mapped to a
+    project (spec §7: GitHub's numeric repository id is the stable
+    identity, so it can only ever map to one project)."""
+
+    def __init__(self, github_repository_id: Any) -> None:
+        super().__init__(f"GitHub repository {github_repository_id} is already mapped")
+        self.github_repository_id = github_repository_id
+
+
+class GitHubPullRequestAnalysisNotFound(NotFoundError):
+    def __init__(self, analysis_id: Any) -> None:
+        super().__init__(f"GitHub pull request analysis {analysis_id} not found")
+        self.analysis_id = analysis_id
+
+
+class InvalidGitHubPullRequestPayload(AgentABIError):
+    """Raised for a `pull_request` webhook body that is malformed JSON,
+    not an object, or a supported action missing a field this
+    integration needs (Phase 12 spec §6/§36). Mapped to HTTP 400 —
+    "rejected safely," never an unhandled parse exception."""
+
+
+class MissingAgentABIConfiguration(AgentABIError):
+    """Raised when a mapped repository has no explicit, deterministic
+    analysis contract yet — e.g. no `component_id` configured, or no
+    `ComponentVersion` registered for the PR's `head_sha` (Phase 12 spec
+    §19: never infer a candidate version from a raw git diff). Mapped
+    to HTTP 422: the repository is mapped, but analysis cannot start
+    without more explicit setup."""
+
+
+class InvalidAgentABIConfiguration(AgentABIError):
+    """Raised when a repository's AgentABI configuration exists but is
+    structurally invalid (Phase 12 spec §20) — e.g. a `baseline_version`
+    that doesn't parse as a plausible version string. Mapped to HTTP
+    422."""
+
+
+class GitHubAPIUnavailable(AgentABIError):
+    """Raised when the GitHub API is unreachable or returns a 5xx after
+    bounded retries are exhausted (Phase 12 spec §27/§29). Mapped to
+    HTTP 502 — the request was fine, the upstream call failed."""
+
+
+class GitHubAuthenticationFailed(AgentABIError):
+    """Raised when GitHub rejects the configured checks credential
+    (401/403) — never retried (spec §29: retrying an auth failure just
+    repeats it). Mapped to HTTP 502: this AgentABI request was fine,
+    the upstream credential is the problem."""
+
+
+class GitHubCheckPublishFailed(AgentABIError):
+    """Raised for a non-auth, non-5xx GitHub Checks API failure (a
+    validation error, an unknown ref, a malformed response) — never
+    retried, never treated as "transiently unavailable" (spec §27/§29).
+    Mapped to HTTP 502."""

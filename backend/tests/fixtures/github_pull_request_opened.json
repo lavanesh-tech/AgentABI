@@ -1,0 +1,32 @@
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "number": 42,
+    "html_url": "https://github.com/acme-corp/payments-service/pull/42",
+    "head": {
+      "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      "ref": "feature/update-schema"
+    },
+    "base": {
+      "sha": "0f1e2d3c4b5a69788796a5b4c3d2e1f009887766",
+      "ref": "main"
+    }
+  },
+  "repository": {
+    "id": 123456789,
+    "name": "payments-service",
+    "full_name": "acme-corp/payments-service",
+    "owner": {
+      "login": "acme-corp",
+      "id": 987654321
+    }
+  },
+  "sender": {
+    "login": "octocat",
+    "id": 111222333
+  },
+  "installation": {
+    "id": 555000111
+  }
+}

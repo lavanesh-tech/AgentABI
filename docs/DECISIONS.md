@@ -2,6 +2,87 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-062 — PR-analysis dispatch lives in the webhook route, not inside `GitHubWebhookService.process()` (2026-09-14)
+
+Phase 12 wires GitHub PR analysis into the existing Security-Phase-E
+webhook endpoint additively rather than editing `GitHubWebhookService.
+process()` itself. The route calls `service.process()` first (unchanged
+signature, unchanged tests), and only for an `accepted` `pull_request`
+delivery does it call a new `_dispatch_pr_analysis(...)` helper, wrapped
+in a broad `try/except AgentABIError`/`except Exception` that always
+logs via `structlog` and never changes the webhook's own 202 response.
+This decouples "the delivery was received" (the webhook's job, always
+true on success) from "the PR check was successfully published" (best-
+effort, independently retryable) — and, more importantly, keeps every
+already-passing Phase E test (idempotency, HMAC, rate limiting) at zero
+regression risk, since the security-critical service function is
+untouched.
+
+## ADR-061 — `github_pr_analyses` is not immutable-once-created, unlike `differential_reports`/`risk_assessments` (2026-09-14)
+
+Migration 0010 adds no UPDATE-blocking trigger on `github_pr_analyses`,
+diverging from the Phase 10/11 immutable-evidence pattern. This table
+tracks *operational pipeline state* for one logical PR analysis
+(`status`, `check_run_id`, `risk_assessment_id`, `publish_error`), which
+legitimately mutates as the pipeline progresses (PENDING -> IN_PROGRESS
+-> COMPLETED/FAILED/PUBLISH_FAILED) — it is not itself a piece of
+deterministic evidence. The evidence it points to
+(`compatibility_scan_id`, `risk_assessment_id`) remains immutable
+through the existing Phase 5/11 tables; `github_pr_analyses` only ever
+gains foreign keys to that evidence; it never recomputes or overwrites
+it.
+
+## ADR-060 — Candidate/baseline version contract: `component_id` + optional `baseline_version` + `head_sha`-as-candidate-version, not `.agentabi.yaml` fetched via the GitHub Contents API (2026-09-14)
+
+Spec §19's "reality check" forbids inferring a candidate component
+version from a raw git diff. Rather than fetch a repo-side config file
+through the GitHub Contents API — a whole additional, untested-without-
+real-GitHub surface — Phase 12 reuses Phase 5's existing version-string
+identity directly: `GitHubRepositoryMapping.component_id` (admin-
+configured, required) + optional `baseline_version` (defaults to the
+component's latest registered `ComponentVersion`) + the PR's `head_sha`
+used verbatim as the candidate `ComponentVersion.version` string. The
+caller's CI is expected to register a `ComponentVersion` with
+`version == head_sha` before triggering analysis; if none exists,
+`MissingAgentABIConfiguration` is raised rather than guessed. This adds
+zero new Phase 5 code (`ComponentRegistryService.
+get_latest_component_version`, `CompatibilityService.run_scan` already
+existed) and is fully deterministic and testable without any GitHub
+API call.
+
+## ADR-059 — Phase 12 orchestrates Compatibility -> Risk only; Replay/Differential are out of scope for the PR-analysis pipeline (2026-09-14)
+
+`GitHubPullRequestAnalysisService` calls `CompatibilityService.run_scan`
+then `RiskService.run_assessment(project_id, compatibility_scan_id=...)`
+— it does not invoke Phase 7 replay or Phase 10 differential. Both
+require a pre-existing recorded trajectory plus two completed replay
+runs, identifiers a bare GitHub webhook has no way to supply without a
+much larger configuration surface (which replay run is "baseline",
+which is "candidate" for this specific commit) that would risk
+fabricating a relationship that isn't actually there. `RiskService.
+run_assessment` already supports a `compatibility_scan_id`-only call
+(added in Phase 11), so this is a supported, non-fabricated use of the
+existing risk engine, not a workaround. A PR check can still reach WARN/
+BLOCK purely from compatibility-derived risk rules; replay/differential-
+sourced risk signal is out of scope until a future phase defines how a
+webhook maps to specific replay runs.
+
+## ADR-058 — GitHub Checks credential: `GitHubCredentialProvider` Protocol + `StaticGitHubCredentialProvider`, not a full GitHub App JWT/installation-token exchange (2026-09-14)
+
+A true GitHub App installation-token flow requires signing a JWT with
+RS256, which needs a crypto library (`pyjwt`/`cryptography`) — not
+installable in this sandbox (same PyPI restriction documented for every
+phase, see `app/auth/jwt.py`'s hand-rolled HS256). Rather than block
+Phase 12 on that, `app/github/checks_models.py` defines a
+`GitHubCredentialProvider` Protocol (`async def get_token() -> str`),
+and `app/github/checks_client.py` ships `StaticGitHubCredentialProvider`
+(reads `Settings.github_checks_token`) as the production implementation
+for now. `HttpxGitHubChecksClient` depends only on the Protocol, so a
+real RS256-based JWT-then-installation-token exchange can implement the
+same Protocol later with zero changes to any caller or test double
+(`FakeGitHubChecksClient` already satisfies `GitHubChecksClient`
+directly, independent of credentials entirely).
+
 ## ADR-057 — Per-category score caps as the double-counting policy; hard-block rules always carry `score_delta = 0` (2026-09-14)
 
 Spec §16 requires "a clear policy" against over-penalizing the same
