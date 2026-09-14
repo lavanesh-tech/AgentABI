@@ -14,11 +14,22 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.github_oauth import get_github_oauth_service
+from app.api.deps.rate_limit import rate_limit_by_client
 from app.auth.principal import AuthenticatedPrincipal
+from app.core.config import get_settings
 from app.models.organization_member import OrganizationRole
 from app.services.github_oauth_service import GitHubCallbackResult, GitHubOAuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+_settings = get_settings()
+# By client IP/identity (spec §5) — these run before any AgentABI user
+# identity exists, so there is no user_id to key on yet.
+_RATE_AUTH = Depends(
+    rate_limit_by_client(
+        "auth", _settings.rate_limit_auth_requests, _settings.rate_limit_auth_window_seconds
+    )
+)
 
 
 class AuthMeResponse(BaseModel):
@@ -75,7 +86,7 @@ class GitHubCallbackResponse(BaseModel):
         )
 
 
-@router.get("/github/login")
+@router.get("/github/login", dependencies=[_RATE_AUTH])
 async def github_login(
     service: Annotated[GitHubOAuthService, Depends(get_github_oauth_service)],
 ) -> RedirectResponse:
@@ -83,7 +94,7 @@ async def github_login(
     return RedirectResponse(url=start.authorization_url, status_code=302)
 
 
-@router.get("/github/callback", response_model=GitHubCallbackResponse)
+@router.get("/github/callback", response_model=GitHubCallbackResponse, dependencies=[_RATE_AUTH])
 async def github_callback(
     service: Annotated[GitHubOAuthService, Depends(get_github_oauth_service)],
     code: Annotated[str | None, Query()] = None,

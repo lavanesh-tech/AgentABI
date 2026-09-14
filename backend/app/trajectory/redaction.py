@@ -22,6 +22,13 @@ DEFAULT_SENSITIVE_KEYS: frozenset[str] = frozenset(
         "authorization",
         "access_token",
         "refresh_token",
+        # Security Phase D §16 — extends the Phase 6 set rather than
+        # duplicating it, so every consumer of DEFAULT_SENSITIVE_KEYS
+        # (trajectory event redaction, and any future structured-log
+        # redaction that reuses this module) picks these up too.
+        "client_secret",
+        "jwt_secret",
+        "webhook_secret",
     }
 )
 

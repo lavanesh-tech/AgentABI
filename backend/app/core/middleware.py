@@ -19,6 +19,12 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         correlation_id = request.headers.get(CORRELATION_ID_HEADER, str(uuid.uuid4()))
+        # Set on request.state (not just structlog's contextvars) so the
+        # exception handlers in app/api/v1/errors.py can read it directly —
+        # they run inside call_next(), so contextvars would technically
+        # still be bound at that point too, but request.state is the more
+        # explicit, harness-independent source of truth (Security Phase D).
+        request.state.correlation_id = correlation_id
         bind_correlation_id(correlation_id)
         try:
             response = await call_next(request)

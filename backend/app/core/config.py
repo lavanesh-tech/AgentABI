@@ -32,6 +32,44 @@ class Settings(BaseSettings):
     # --- API ----------------------------------------------------------------
     api_v1_prefix: str = "/api/v1"
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    # Credentials (cookies/Authorization headers) only matter with CORS when
+    # a browser-based frontend needs them; kept True to match the frontend's
+    # eventual use of the Bearer JWT from a browser — never paired with a
+    # wildcard origin (app/core/cors.py asserts this at startup).
+    cors_allow_credentials: bool = True
+
+    # --- Request size protection (Security Phase D) ------------------------
+    # Rejected before the body is fully read (app/core/request_size.py) —
+    # 5MB comfortably covers every JSON payload this API accepts (trajectory
+    # events, scan/replay requests) without inviting a large-body DoS.
+    max_request_body_bytes: int = 5_000_000
+
+    # --- Rate limiting (Security Phase D) -----------------------------------
+    # Redis-backed fixed-window counters (app/core/rate_limit.py). Separate
+    # limits per endpoint class, each independently configurable.
+    rate_limit_auth_requests: int = 10
+    rate_limit_auth_window_seconds: int = 60
+    rate_limit_mutation_requests: int = 30
+    rate_limit_mutation_window_seconds: int = 60
+    rate_limit_scan_replay_requests: int = 10
+    rate_limit_scan_replay_window_seconds: int = 60
+    # Fail-closed is the single, non-configurable policy: if Redis can't
+    # be reached to evaluate a limit, the request is denied (503) rather
+    # than silently let through unchecked. See docs/DECISIONS.md — this
+    # is deliberately not a per-endpoint toggle, to keep the policy easy
+    # to audit.
+
+    # --- Reverse-proxy trust (Security Phase D) -----------------------------
+    # How many `X-Forwarded-For` entries (from the right) to trust as
+    # having been added by a real proxy in front of this API, for deriving
+    # a client identity to rate-limit anonymous requests by. 0 (default)
+    # means "no proxy is trusted" — use the direct TCP peer address only,
+    # correct for local dev and any deployment without a reverse proxy.
+    # A production deployment behind exactly one trusted load balancer
+    # (e.g. an ALB) should set this to 1. Never trust the full header
+    # as-is: every entry left of the trusted proxies' own entries is
+    # client-supplied and trivially spoofable.
+    trusted_proxy_count: int = 0
 
     # --- PostgreSQL -----------------------------------------------------
     postgres_dsn: PostgresDsn = Field(
@@ -85,6 +123,10 @@ class Settings(BaseSettings):
     @property
     def is_local(self) -> bool:
         return self.environment == "local"
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
 
 
 @lru_cache

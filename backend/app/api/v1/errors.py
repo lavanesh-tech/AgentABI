@@ -5,15 +5,28 @@ needs its own try/except around a service call. Starlette resolves the
 handler by walking the exception's MRO, so a leaf exception like
 `DuplicateComponent` (a `ConflictError`) is caught by the `ConflictError`
 handler without needing its own registration.
+
+Security Phase D §11/§14 standardizes every error response (domain
+errors, FastAPI/Pydantic validation errors, and unhandled exceptions)
+into one envelope: `{"error": {"code": ..., "message": ..., "request_id":
+...}}`. `request_id` is the correlation id set on `request.state` by
+`CorrelationIdMiddleware` — never absent, since that middleware runs on
+every request before routing.
 """
 
-from fastapi import FastAPI, Request
+import uuid
+
+import structlog
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.domain.exceptions import (
     AgentABIError,
     AuthenticationError,
+    AuthenticationRequired,
     ConflictError,
+    ExpiredToken,
     GitHubAuthorizationDenied,
     GitHubIdentityLookupFailed,
     GitHubOAuthNotConfigured,
@@ -32,6 +45,8 @@ from app.domain.exceptions import (
     OrganizationAccessDenied,
     PermissionDenied,
     ProjectAccessDenied,
+    RateLimited,
+    RateLimiterUnavailable,
     ReplayExecutionFailed,
     ReplayExecutorUnavailable,
     SchemaNormalizationError,
@@ -39,19 +54,78 @@ from app.domain.exceptions import (
     UnsupportedCompatibilityType,
 )
 
+logger = structlog.get_logger(__name__)
 
-def _error_response(status_code: int, message: str) -> JSONResponse:
-    return JSONResponse(status_code=status_code, content={"detail": message})
+# --- Standardized error codes (spec §11) -----------------------------------
+VALIDATION_ERROR = "VALIDATION_ERROR"
+AUTHENTICATION_REQUIRED = "AUTHENTICATION_REQUIRED"
+INVALID_TOKEN = "INVALID_TOKEN"
+TOKEN_EXPIRED = "TOKEN_EXPIRED"
+AUTHORIZATION_DENIED = "AUTHORIZATION_DENIED"
+RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
+RATE_LIMITED = "RATE_LIMITED"
+CONFLICT = "CONFLICT"
+REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE"
+INTERNAL_ERROR = "INTERNAL_ERROR"
+SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+INVALID_REQUEST = "INVALID_REQUEST"
+UPSTREAM_ERROR = "UPSTREAM_ERROR"
+
+# Domain exception class -> (status_code, error_code). Order doesn't matter
+# for dispatch (FastAPI/Starlette pick the most specific registered
+# handler by MRO) but each entry here becomes its own @app.exception_handler
+# below, so every leaf exception not listed explicitly still resolves to
+# its nearest listed base class (e.g. DuplicateComponent -> ConflictError).
+_DOMAIN_ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
+    NotFoundError: (status.HTTP_404_NOT_FOUND, RESOURCE_NOT_FOUND),
+    ConflictError: (status.HTTP_409_CONFLICT, CONFLICT),
+    InvalidComponentContent: (status.HTTP_422_UNPROCESSABLE_ENTITY, VALIDATION_ERROR),
+    InvalidDependencyRelationship: (status.HTTP_422_UNPROCESSABLE_ENTITY, VALIDATION_ERROR),
+    GraphUnavailable: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
+    InvalidCompatibilityComparison: (status.HTTP_422_UNPROCESSABLE_ENTITY, VALIDATION_ERROR),
+    UnsupportedCompatibilityType: (status.HTTP_422_UNPROCESSABLE_ENTITY, VALIDATION_ERROR),
+    SchemaNormalizationError: (status.HTTP_422_UNPROCESSABLE_ENTITY, VALIDATION_ERROR),
+    InvalidTrajectoryEvent: (status.HTTP_422_UNPROCESSABLE_ENTITY, VALIDATION_ERROR),
+    TrajectoryPayloadTooLarge: (status.HTTP_422_UNPROCESSABLE_ENTITY, VALIDATION_ERROR),
+    InvalidReplaySubstitution: (status.HTTP_422_UNPROCESSABLE_ENTITY, VALIDATION_ERROR),
+    ReplayExecutorUnavailable: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
+    ReplayExecutionFailed: (status.HTTP_422_UNPROCESSABLE_ENTITY, VALIDATION_ERROR),
+    OAuthStateInvalid: (status.HTTP_401_UNAUTHORIZED, INVALID_TOKEN),
+    GitHubAuthorizationDenied: (status.HTTP_401_UNAUTHORIZED, INVALID_TOKEN),
+    MissingAuthorizationCode: (status.HTTP_400_BAD_REQUEST, INVALID_REQUEST),
+    GitHubTokenExchangeFailed: (status.HTTP_502_BAD_GATEWAY, UPSTREAM_ERROR),
+    GitHubIdentityLookupFailed: (status.HTTP_502_BAD_GATEWAY, UPSTREAM_ERROR),
+    MalformedGitHubIdentity: (status.HTTP_502_BAD_GATEWAY, UPSTREAM_ERROR),
+    OAuthStateStoreUnavailable: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
+    GitHubOAuthNotConfigured: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
+    PermissionDenied: (status.HTTP_403_FORBIDDEN, AUTHORIZATION_DENIED),
+    OrganizationAccessDenied: (status.HTTP_404_NOT_FOUND, RESOURCE_NOT_FOUND),
+    ProjectAccessDenied: (status.HTTP_404_NOT_FOUND, RESOURCE_NOT_FOUND),
+    RateLimiterUnavailable: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
+    AgentABIError: (status.HTTP_400_BAD_REQUEST, INVALID_REQUEST),
+}
+
+
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "correlation_id", None) or str(uuid.uuid4())
+
+
+def _envelope(status_code: int, code: str, message: str, request_id: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": code, "message": message, "request_id": request_id}},
+    )
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    @app.exception_handler(NotFoundError)
-    async def handle_not_found(request: Request, exc: NotFoundError) -> JSONResponse:
-        return _error_response(404, str(exc))
+    def _make_handler(status_code: int, code: str):
+        async def _handler(request: Request, exc: Exception) -> JSONResponse:
+            return _envelope(status_code, code, str(exc), _request_id(request))
 
-    @app.exception_handler(ConflictError)
-    async def handle_conflict(request: Request, exc: ConflictError) -> JSONResponse:
-        return _error_response(409, str(exc))
+        return _handler
+
+    for exc_class, (status_code, code) in _DOMAIN_ERROR_MAP.items():
+        app.add_exception_handler(exc_class, _make_handler(status_code, code))
 
     @app.exception_handler(AuthenticationError)
     async def handle_authentication_error(
@@ -63,136 +137,71 @@ def register_exception_handlers(app: FastAPI) -> None:
         # distinguishable HTTP responses. A WWW-Authenticate header is
         # the standard signal that a bearer-token challenge is expected
         # (RFC 6750).
-        response = _error_response(401, str(exc))
+        if isinstance(exc, ExpiredToken):
+            code = TOKEN_EXPIRED
+        elif isinstance(exc, AuthenticationRequired):
+            code = AUTHENTICATION_REQUIRED
+        else:
+            code = INVALID_TOKEN
+        response = _envelope(status.HTTP_401_UNAUTHORIZED, code, str(exc), _request_id(request))
         response.headers["WWW-Authenticate"] = "Bearer"
         return response
 
-    @app.exception_handler(InvalidComponentContent)
-    async def handle_invalid_content(
-        request: Request, exc: InvalidComponentContent
+    @app.exception_handler(RateLimited)
+    async def handle_rate_limited(request: Request, exc: RateLimited) -> JSONResponse:
+        response = _envelope(
+            status.HTTP_429_TOO_MANY_REQUESTS, RATE_LIMITED, str(exc), _request_id(request)
+        )
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return response
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(
+        request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        return _error_response(422, str(exc))
+        # FastAPI/Pydantic's default `errors()` includes an `input` key
+        # echoing the raw submitted value back — that can be an
+        # oversized body, or (worse) a secret the caller mistakenly put
+        # in a field. Keep only location/message/type: enough for a
+        # caller to fix their request, nothing echoed back.
+        safe_errors = [
+            {
+                "location": list(error.get("loc", [])),
+                "message": error.get("msg", "Invalid value"),
+                "type": error.get("type", "value_error"),
+            }
+            for error in exc.errors()
+        ]
+        request_id = _request_id(request)
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "error": {
+                    "code": VALIDATION_ERROR,
+                    "message": "Request validation failed",
+                    "request_id": request_id,
+                    "fields": safe_errors,
+                }
+            },
+        )
 
-    @app.exception_handler(InvalidDependencyRelationship)
-    async def handle_invalid_dependency_relationship(
-        request: Request, exc: InvalidDependencyRelationship
-    ) -> JSONResponse:
-        return _error_response(422, str(exc))
-
-    @app.exception_handler(GraphUnavailable)
-    async def handle_graph_unavailable(request: Request, exc: GraphUnavailable) -> JSONResponse:
-        return _error_response(503, str(exc))
-
-    @app.exception_handler(InvalidCompatibilityComparison)
-    async def handle_invalid_compatibility_comparison(
-        request: Request, exc: InvalidCompatibilityComparison
-    ) -> JSONResponse:
-        return _error_response(422, str(exc))
-
-    @app.exception_handler(UnsupportedCompatibilityType)
-    async def handle_unsupported_compatibility_type(
-        request: Request, exc: UnsupportedCompatibilityType
-    ) -> JSONResponse:
-        return _error_response(422, str(exc))
-
-    @app.exception_handler(SchemaNormalizationError)
-    async def handle_schema_normalization_error(
-        request: Request, exc: SchemaNormalizationError
-    ) -> JSONResponse:
-        return _error_response(422, str(exc))
-
-    @app.exception_handler(InvalidTrajectoryEvent)
-    async def handle_invalid_trajectory_event(
-        request: Request, exc: InvalidTrajectoryEvent
-    ) -> JSONResponse:
-        return _error_response(422, str(exc))
-
-    @app.exception_handler(TrajectoryPayloadTooLarge)
-    async def handle_trajectory_payload_too_large(
-        request: Request, exc: TrajectoryPayloadTooLarge
-    ) -> JSONResponse:
-        return _error_response(422, str(exc))
-
-    @app.exception_handler(InvalidReplaySubstitution)
-    async def handle_invalid_replay_substitution(
-        request: Request, exc: InvalidReplaySubstitution
-    ) -> JSONResponse:
-        return _error_response(422, str(exc))
-
-    @app.exception_handler(ReplayExecutorUnavailable)
-    async def handle_replay_executor_unavailable(
-        request: Request, exc: ReplayExecutorUnavailable
-    ) -> JSONResponse:
-        return _error_response(503, str(exc))
-
-    @app.exception_handler(ReplayExecutionFailed)
-    async def handle_replay_execution_failed(
-        request: Request, exc: ReplayExecutionFailed
-    ) -> JSONResponse:
-        return _error_response(422, str(exc))
-
-    @app.exception_handler(OAuthStateInvalid)
-    async def handle_oauth_state_invalid(request: Request, exc: OAuthStateInvalid) -> JSONResponse:
-        return _error_response(401, str(exc))
-
-    @app.exception_handler(GitHubAuthorizationDenied)
-    async def handle_github_authorization_denied(
-        request: Request, exc: GitHubAuthorizationDenied
-    ) -> JSONResponse:
-        return _error_response(401, str(exc))
-
-    @app.exception_handler(MissingAuthorizationCode)
-    async def handle_missing_authorization_code(
-        request: Request, exc: MissingAuthorizationCode
-    ) -> JSONResponse:
-        return _error_response(400, str(exc))
-
-    @app.exception_handler(GitHubTokenExchangeFailed)
-    async def handle_github_token_exchange_failed(
-        request: Request, exc: GitHubTokenExchangeFailed
-    ) -> JSONResponse:
-        return _error_response(502, str(exc))
-
-    @app.exception_handler(GitHubIdentityLookupFailed)
-    async def handle_github_identity_lookup_failed(
-        request: Request, exc: GitHubIdentityLookupFailed
-    ) -> JSONResponse:
-        return _error_response(502, str(exc))
-
-    @app.exception_handler(MalformedGitHubIdentity)
-    async def handle_malformed_github_identity(
-        request: Request, exc: MalformedGitHubIdentity
-    ) -> JSONResponse:
-        return _error_response(502, str(exc))
-
-    @app.exception_handler(OAuthStateStoreUnavailable)
-    async def handle_oauth_state_store_unavailable(
-        request: Request, exc: OAuthStateStoreUnavailable
-    ) -> JSONResponse:
-        return _error_response(503, str(exc))
-
-    @app.exception_handler(GitHubOAuthNotConfigured)
-    async def handle_github_oauth_not_configured(
-        request: Request, exc: GitHubOAuthNotConfigured
-    ) -> JSONResponse:
-        return _error_response(503, str(exc))
-
-    @app.exception_handler(PermissionDenied)
-    async def handle_permission_denied(request: Request, exc: PermissionDenied) -> JSONResponse:
-        return _error_response(403, str(exc))
-
-    @app.exception_handler(OrganizationAccessDenied)
-    async def handle_organization_access_denied(
-        request: Request, exc: OrganizationAccessDenied
-    ) -> JSONResponse:
-        return _error_response(404, str(exc))
-
-    @app.exception_handler(ProjectAccessDenied)
-    async def handle_project_access_denied(
-        request: Request, exc: ProjectAccessDenied
-    ) -> JSONResponse:
-        return _error_response(404, str(exc))
-
-    @app.exception_handler(AgentABIError)
-    async def handle_generic_domain_error(request: Request, exc: AgentABIError) -> JSONResponse:
-        return _error_response(400, str(exc))
+    @app.exception_handler(Exception)
+    async def handle_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+        # Full detail (type, message, traceback via exc_info) goes only to
+        # the server-side structured logger — secrets already flow through
+        # this logger's existing redaction path elsewhere in the app.
+        # Never: traceback, SQL text, Redis error text, JWT internals,
+        # OAuth provider payloads, or environment values reach the client.
+        request_id = _request_id(request)
+        logger.exception(
+            "unhandled_exception",
+            request_id=request_id,
+            path=request.url.path,
+            exc_type=type(exc).__name__,
+        )
+        return _envelope(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            INTERNAL_ERROR,
+            "An internal error occurred",
+            request_id,
+        )

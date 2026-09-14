@@ -362,3 +362,37 @@ changes.
 Run `make install && make lint && make typecheck && make test &&
 alembic upgrade head` locally to complete verification before starting
 Security Phase D.
+
+## Security Phase D — API Hardening (2026-09-14)
+
+Redis-backed fixed-window rate limiting (fail-closed, ADR-043) applied
+to GitHub OAuth login/callback, compatibility scan creation, replay
+creation/execution, and trajectory creation/append via reusable
+dependencies. Environment-aware CORS (never wildcard+credentials),
+security response headers (no CSP at this layer — ADR-045; HSTS only in
+production), a raw-ASGI request-size limit (413, webhook-safe —
+ADR-046), and a standardized `{"error": {code, message, request_id}}`
+envelope replacing the old `{"detail": ...}` shape across every domain
+exception, FastAPI validation error, and unhandled exception. Does not
+implement GitHub webhook HMAC verification or persistent audit logging
+— deferred to Security Phase E, per spec.
+
+Same sandbox restriction as every prior phase (no SQLAlchemy/FastAPI/
+httpx/redis-py). New pure modules (`app/core/rate_limit.py`,
+`app/core/cors.py`) ran for real via `pytest --noconftest`: **18/18 new
+pure unit tests passed**; combined with the full existing pure suite,
+**226/226 passed**, confirming no regression. The Redis algorithm itself
+was exercised against a real local Redis server via raw `redis-cli
+EVAL` (atomic increment, TTL, threshold enforcement, independent
+principals, reset-after-expiry, and cross-invocation shared state
+proving distributed correctness) since the Python `redis` client isn't
+installable here. Four integration test files (error envelope, security
+headers, request size, serialization security) are written and
+`py_compile`-clean but not pytest-executed — need SQLAlchemy/FastAPI/
+httpx. `ruff format --check`/`ruff check` clean; `python3.12 -m
+py_compile` clean across `app`/`tests`; `mypy` fails on the same
+pre-existing `pydantic.mypy` error as every prior phase. No migration
+was needed — Phase D adds no schema changes.
+
+Run `make install && make lint && make typecheck && make test` locally
+to complete verification before starting Security Phase E.

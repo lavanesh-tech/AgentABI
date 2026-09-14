@@ -1149,3 +1149,38 @@ SQLAlchemy/FastAPI/httpx, unavailable this session — same bucket as
 `test_auth_api.py`. No migration was needed or created — Phase C adds
 no new columns/tables, only authorization logic and a minimal `Project`
 CRUD surface over the existing `projects` table.
+
+### API hardening (Security Phase D)
+
+Redis-backed distributed rate limiting (`app/core/rate_limit.py`,
+`app/api/deps/rate_limit.py`) is applied via reusable dependencies
+(`rate_limit_by_user`/`rate_limit_by_client`), never hand-written Redis
+calls in routes: `/api/v1/auth/github/login`, `/api/v1/auth/github/
+callback` (by client identity — no user exists yet), compatibility scan
+creation, replay creation/execution, and trajectory creation/append (by
+user id). Algorithm and failure policy: ADR-043. Identity derivation
+(user id vs. trusted-proxy-aware client IP): ADR-044.
+
+Every error response uses one standardized envelope,
+`{"error": {"code", "message", "request_id"}}` (`app/api/v1/errors.py`);
+codes include `VALIDATION_ERROR`, `AUTHENTICATION_REQUIRED`,
+`INVALID_TOKEN`, `TOKEN_EXPIRED`, `AUTHORIZATION_DENIED`,
+`RESOURCE_NOT_FOUND`, `RATE_LIMITED`, `CONFLICT`, `REQUEST_TOO_LARGE`,
+`INTERNAL_ERROR`. See ADR-045.
+
+CORS is environment-driven, never hardcoded (`app/core/cors.py`):
+`CORS_ALLOW_ORIGINS`/`CORS_ALLOW_CREDENTIALS` configure it for both dev
+and production, with credentials-plus-wildcard rejected at startup.
+Security headers (`app/core/security_headers.py`) add
+`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` on every
+response, `Strict-Transport-Security` only in production, and
+`Cache-Control: no-store` on `/api/v1/auth/*` responses.
+`Content-Security-Policy` is deliberately not set at this layer — see
+ADR-045. `MAX_REQUEST_BODY_BYTES` is enforced by a raw ASGI middleware
+(`app/core/request_size.py`, ADR-046) that rejects oversized requests
+with 413 before buffering the body, so Phase E's webhook raw-body HMAC
+verification remains unaffected.
+
+`app/trajectory/redaction.py`'s `DEFAULT_SENSITIVE_KEYS` now also covers
+`client_secret`/`jwt_secret`/`webhook_secret` (extended in place, not
+duplicated) for any future structured-log redaction that reuses it.

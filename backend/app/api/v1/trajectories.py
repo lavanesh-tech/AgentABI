@@ -16,7 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.authz import require_project_permission
+from app.api.deps.rate_limit import rate_limit_by_user
 from app.authz.permissions import Permission
+from app.core.config import get_settings
 from app.core.database import get_db_session
 from app.models.trajectory import Trajectory
 from app.models.trajectory_event import TrajectoryEvent
@@ -27,6 +29,18 @@ router = APIRouter(prefix="/projects/{project_id}/trajectories", tags=["trajecto
 
 _READ = Depends(require_project_permission(Permission.TRAJECTORY_READ))
 _WRITE = Depends(require_project_permission(Permission.TRAJECTORY_WRITE))
+
+_settings = get_settings()
+# Only creation/append (the two highest-volume, highest-cost write paths
+# per spec §5) are rate-limited here — not complete/fail, which are rare,
+# one-time terminal transitions per trajectory.
+_RATE_TRAJECTORY_WRITE = Depends(
+    rate_limit_by_user(
+        "trajectory_write",
+        _settings.rate_limit_mutation_requests,
+        _settings.rate_limit_mutation_window_seconds,
+    )
+)
 
 
 class TrajectoryStartRequest(BaseModel):
@@ -190,7 +204,7 @@ ServiceDep = Annotated[TrajectoryRecorderService, Depends(get_trajectory_recorde
     "",
     response_model=TrajectoryResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_WRITE],
+    dependencies=[_WRITE, _RATE_TRAJECTORY_WRITE],
 )
 async def start_trajectory(
     project_id: uuid.UUID, payload: TrajectoryStartRequest, service: ServiceDep
@@ -241,7 +255,7 @@ async def get_trajectory(
     "/{trajectory_id}/events",
     response_model=EventResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_WRITE],
+    dependencies=[_WRITE, _RATE_TRAJECTORY_WRITE],
 )
 async def append_event(
     project_id: uuid.UUID,
