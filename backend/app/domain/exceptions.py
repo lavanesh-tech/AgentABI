@@ -635,6 +635,29 @@ class LLMInvalidResponse(LLMError):
         self.detail = detail
 
 
+class DifferentialReportNotFound(NotFoundError):
+    def __init__(self, report_id: Any) -> None:
+        super().__init__(f"Differential report {report_id} not found")
+        self.report_id = report_id
+
+
+class ReplayNotReadyForDifferential(ConflictError):
+    """Raised when `DifferentialService` is asked to compare a replay
+    that isn't COMPLETED (spec §18: a differential analysis needs each
+    replay's full, final step evidence — comparing a still-RUNNING or
+    FAILED-midway replay would silently compare partial data). Mapped to
+    HTTP 409: the request is well-formed, the replay just isn't in the
+    right state yet."""
+
+    def __init__(self, replay_id: Any, status: Any) -> None:
+        super().__init__(
+            f"Replay {replay_id} is {status!r}, not completed; cannot run "
+            "differential analysis against it"
+        )
+        self.replay_id = replay_id
+        self.status = status
+
+
 class LLMExplanationFailed(LLMError):
     """Raised for a provider-reported failure that isn't a timeout or
     transport error — e.g. an authentication error, a rate limit from

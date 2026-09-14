@@ -13,6 +13,8 @@ _MEMBER_READ_ONLY = {
     Permission.TRAJECTORY_READ,
     Permission.REPLAY_READ,
     Permission.GRAPH_READ,
+    # Phase 10 spec §22: MEMBER may read differential reports.
+    Permission.DIFFERENTIAL_READ,
 }
 
 _ENGINEERING_WRITES = {
@@ -25,6 +27,8 @@ _ENGINEERING_WRITES = {
     Permission.GRAPH_WRITE,
     # Security Phase E spec §17: ADMIN may read the audit trail.
     Permission.AUDIT_READ,
+    # Phase 10 spec §22: ADMIN may execute differential analysis.
+    Permission.DIFFERENTIAL_EXECUTE,
 }
 
 _GOVERNANCE = {Permission.MEMBERSHIP_MANAGE, Permission.ORG_MANAGE}

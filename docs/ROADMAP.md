@@ -467,3 +467,40 @@ re-checked this phase (no schema change — Phase 8 added no tables).
 Run `make install && make lint && make typecheck && make test` locally
 (with a real `OPENAI_API_KEY` if you want to exercise the live endpoint)
 to complete verification before starting Phase 10.
+
+## Phase 8 — OpenAI Provider Integration: COMPLETE
+
+## Phase 9 — Gemini Provider Integration: SKIPPED / OPTIONAL
+
+## Phase 10 — Differential Analyzer: COMPLETE
+
+## Phase 11 — Deterministic Risk Engine: NEXT
+
+Adds `app/differential/` (models, alignment, value_diff, analyzer — all
+dependency-free/pure), `app/models/differential_{report,change}.py`,
+migration 0008, `app/repositories/differential_repository.py`,
+`app/services/differential_service.py`, `app/api/v1/differential.py`
+(`POST/GET .../differential/reports`, `GET .../reports/{id}`), and two
+new centralized permissions (`DIFFERENTIAL_READ`/`DIFFERENTIAL_EXECUTE`).
+Deterministically compares two COMPLETED replays' steps — never an LLM,
+never a risk score. See docs/ARCHITECTURE.md's Phase 10 section and
+docs/DECISIONS.md ADR-053/054/055.
+
+Same sandbox restriction as every prior phase: `pytest-asyncio` and
+SQLAlchemy aren't installable here. Pure logic ran for real via `pytest
+--noconftest`: value-diff, step alignment, the end-to-end analyzer, and
+the AST-based no-LLM-dependency test — **45/45 passed**. Fixing this
+phase's two new `Permission` entries required updating
+`tests/test_authz_permissions.py`'s hardcoded expected sets — a real
+regression this session caught and fixed, not left unaddressed. Full
+sweep across every pure-runnable test in `tests/`: **290 passed**, no
+new failures beyond the pre-existing async/FastAPI-dependent gaps every
+phase already documents. `ruff format --check`/`ruff check` clean;
+`python3.12 -m py_compile` clean across `app`/`tests`/`alembic`; `mypy`
+unavailable (`No module named mypy`), same as every phase.
+`tests/test_differential_service.py` (real-Postgres integration) is
+written/`py_compile`-clean, not pytest-executed (needs SQLAlchemy).
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Phase 11.

@@ -1361,3 +1361,78 @@ test_openai_provider_mock.py` (mocks the `openai` SDK boundary) are
 written and `py_compile`-clean but need `pytest-asyncio`, also not
 installable here, so they did not execute this session — see
 docs/DECISIONS.md.
+
+## Phase 10: Differential Analyzer
+
+Answers "what changed between baseline behavior and candidate
+behavior?" — deterministically. `app/differential/` computes this; it
+never calls OpenAI or any LLM (`tests/
+test_differential_no_llm_dependency.py` proves this by AST inspection,
+mirroring Phase 8's architectural-invariant test).
+
+**Input**: two `ReplayRun`s (baseline, candidate), both COMPLETED, both
+in the same project — loaded via `ReplayRepository.get_by_id(project_id,
+replay_id)`, which is *already* project-scoped, so a cross-project or
+cross-org replay id simply doesn't resolve (`ReplayNotFound`) rather
+than needing a separate tenant check (spec §23).
+
+**Step alignment** (`app/differential/alignment.py`) is a deterministic
+fallback hierarchy, never an LLM: (1) `source_event_id` — a perfect
+match when both replays replay the same source trajectory (the common
+case: same historical run, different candidate component version); (2)
+`sequence_number`, for replays of two different trajectories; (3)
+`component_identity`, first-available pairing in ascending sequence
+order; (4) whatever's left becomes `STEP_ADDED`/`STEP_REMOVED`. Every
+pair records which rule matched it.
+
+**Comparison** (`app/differential/analyzer.py`, `app/differential/
+value_diff.py`): per aligned step pair, detects `STEP_STATUS_CHANGED`,
+`TOOL_CHANGED` (component/version), `PROVIDER_INVOCATION_CHANGED`
+(replay `kind` changed), `INPUT_CHANGED`/`OUTPUT_CHANGED` via a pure
+recursive dict/list/scalar diff (sorted-key iteration for deterministic
+ordering; missing-vs-null stays distinguishable via key-presence
+checks, never `.get() is not None`), `ERROR_INTRODUCED`/
+`ERROR_RESOLVED`/`ERROR_CHANGED` (sanitized category only, never a raw
+stack trace), and `LATENCY_CHANGED` (only when both sides have a real
+measured `duration_ms` — never fabricated, no regression-threshold
+judgment, that's Phase 11's job). Sensitive fields (reusing
+`app.trajectory.redaction`'s key set) are compared on their *raw* value
+to correctly detect a change, but only ever recorded redacted.
+
+**Output**: `DifferentialReport` (pure dataclass) — deterministic
+summary metrics (`matched_steps`/`added_steps`/`removed_steps`/
+`new_failures`/etc., spec §15) and zero risk/decision field, same
+structural discipline as Phase 8's `ExplanationResponse`.
+
+**Persistence**: `DifferentialReportRecord`/`DifferentialChangeRecord`
+(migration 0008) — immutable once created (UPDATE-blocking trigger,
+mirrors `replay_steps`), idempotent per `(project_id,
+baseline_replay_id, candidate_replay_id, analyzer_version)` unique
+constraint (spec §19 — a retry returns the existing report, never a
+duplicate), `analyzer_version="1"` frozen at compute time so a future
+rule change never silently reinterprets an old report (spec §20), and a
+canonical SHA-256 `content_hash` (reusing `app.domain.checksums`) for
+reproducibility.
+
+**API**: `POST/GET /api/v1/projects/{project_id}/differential/reports`,
+`GET .../reports/{report_id}` — `DIFFERENTIAL_EXECUTE` (ADMIN/OWNER,
+same cost class as `SCAN_EXECUTE`/`REPLAY_EXECUTE`, reuses the existing
+`scan_replay` rate-limit bucket) and `DIFFERENTIAL_READ` (any
+membership) added centrally to `app/authz/permissions.py`, never as a
+scattered role check.
+
+Phase 11 (risk scoring) and Phase 8 (LLM explanation) both consume a
+`DifferentialReportRecord` as an input; this phase never invokes either.
+
+Same sandbox restriction as every prior phase. Pure logic ran for
+real via `pytest --noconftest`: value-diff, alignment, the full
+analyzer, and the no-LLM-dependency structural test — **45/45 passed**.
+Fixing this phase's `app/authz/permissions.py` addition also required
+updating `tests/test_authz_permissions.py`'s hardcoded expected sets
+(a genuine regression, caught and fixed this session, not left for
+later). Full regression sweep across all pure-runnable tests: **290
+passed** (up from the prior phase's count), no new failures beyond the
+pre-existing async/FastAPI-dependent ones every phase already
+documents. `tests/test_differential_service.py` (real-Postgres
+integration, spec §29) is written and `py_compile`-clean but needs
+SQLAlchemy, not installed here — not executed.

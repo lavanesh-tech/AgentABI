@@ -2,6 +2,47 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-055 — Idempotency key: `(project_id, baseline_replay_id, candidate_replay_id, analyzer_version)`, not a client-supplied key (2026-09-14)
+
+Unlike Phase 6/7's `external_run_id`/`idempotency_key` (client-supplied,
+for retry-safety across network failures), Phase 10 spec §19 asks for
+idempotency across *logical* comparisons — the same baseline/candidate
+pair should never produce two reports at the same analyzer version.
+`differential_reports`' unique constraint is on the four columns that
+together define "the same comparison," enforced at the database level
+(migration 0008) and checked first in `DifferentialService.run_analysis`
+before any comparison work runs. Including `analyzer_version` in the key
+means a future ruleset version *can* re-analyze the same pair and get a
+new report — deliberately, since spec §20 requires old reports to never
+silently change meaning when rules evolve.
+
+## ADR-054 — Step alignment fallback hierarchy is deterministic, never fuzzy (2026-09-14)
+
+Spec §7 forbids LLM-based step matching and specifies an exact fallback
+order. `app/differential/alignment.py` implements it as four sequential
+passes over an ever-shrinking "remaining" set — `source_event_id` exact
+match, then `sequence_number` exact match, then `component_id` paired
+in ascending sequence order (first-available, never best-effort/fuzzy),
+then whatever's left is unmatched. Each pass only considers steps
+neither side has already matched, so a step is claimed by the first
+rule that can match it, never a "best" match by some fuzzy score — this
+keeps the same two inputs always producing the same alignment, provable
+by `tests/test_differential_alignment.py`'s determinism test.
+
+## ADR-053 — Recursive value diff is a new module, not a repurposed Phase 5 schema diff (2026-09-14)
+
+Spec §11 says "reuse Phase 5 schema-diff utilities where appropriate."
+`app/compatibility/diff.py`'s `diff_schemas()` is JSON-Schema-shape-
+aware (expects `type`/`properties`/`required`/`enum` keys) — appropriate
+for comparing two schema *definitions*, not two arbitrary output
+*values* (a tool's actual JSON response, which has no `type`/
+`properties` structure of its own). Repurposing it would mean treating
+ordinary data fields as schema keywords, producing nonsense diffs.
+`app/differential/value_diff.py` is a new, purpose-built recursive
+dict/list/scalar comparison instead — but it does reuse Phase 5's
+`_MAX_DEPTH` recursion-guard pattern and Phase 6's `app.trajectory.
+redaction` sensitive-key set, rather than duplicating either.
+
 ## ADR-052 — No decision field exists in `ExplanationResponse`; the LLM/deterministic boundary is structural (2026-09-14)
 
 Spec §10 mandates the LLM output schema must not contain
