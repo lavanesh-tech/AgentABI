@@ -15,8 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.authz import require_project_permission
+from app.api.deps.rate_limit import rate_limit_by_user
 from app.authz.permissions import Permission
 from app.compatibility.models import Classification, CompatibilityStatus, Severity
+from app.core.config import get_settings
 from app.core.database import get_db_session
 from app.models.compatibility_scan import CompatibilityScan
 from app.services.compatibility_service import CompatibilityService
@@ -25,6 +27,15 @@ router = APIRouter(prefix="/projects/{project_id}/compatibility", tags=["compati
 
 _READ = Depends(require_project_permission(Permission.SCAN_READ))
 _EXECUTE = Depends(require_project_permission(Permission.SCAN_EXECUTE))
+
+_settings = get_settings()
+_RATE_SCAN = Depends(
+    rate_limit_by_user(
+        "scan",
+        _settings.rate_limit_scan_replay_requests,
+        _settings.rate_limit_scan_replay_window_seconds,
+    )
+)
 
 
 class ScanCreateRequest(BaseModel):
@@ -154,7 +165,7 @@ ServiceDep = Annotated[CompatibilityService, Depends(get_compatibility_service)]
     "/scans",
     response_model=ScanResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_EXECUTE],
+    dependencies=[_EXECUTE, _RATE_SCAN],
 )
 async def create_scan(
     project_id: uuid.UUID, payload: ScanCreateRequest, service: ServiceDep

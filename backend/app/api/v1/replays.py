@@ -15,7 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.authz import require_project_permission
+from app.api.deps.rate_limit import rate_limit_by_user
 from app.authz.permissions import Permission
+from app.core.config import get_settings
 from app.core.database import get_db_session
 from app.models.replay_run import ReplayRun
 from app.models.replay_step import ReplayStep
@@ -26,6 +28,15 @@ router = APIRouter(prefix="/projects/{project_id}/replays", tags=["replays"])
 
 _READ = Depends(require_project_permission(Permission.REPLAY_READ))
 _EXECUTE = Depends(require_project_permission(Permission.REPLAY_EXECUTE))
+
+_settings = get_settings()
+_RATE_REPLAY = Depends(
+    rate_limit_by_user(
+        "replay",
+        _settings.rate_limit_scan_replay_requests,
+        _settings.rate_limit_scan_replay_window_seconds,
+    )
+)
 
 
 class ReplayCreateRequest(BaseModel):
@@ -141,7 +152,7 @@ ServiceDep = Annotated[ReplayService, Depends(get_replay_service)]
     "",
     response_model=ReplayResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_EXECUTE],
+    dependencies=[_EXECUTE, _RATE_REPLAY],
 )
 async def create_replay(
     project_id: uuid.UUID, payload: ReplayCreateRequest, service: ServiceDep
@@ -184,7 +195,9 @@ async def get_replay(
     return ReplayResponse.from_replay(replay_run)
 
 
-@router.post("/{replay_id}/execute", response_model=ReplayResponse, dependencies=[_EXECUTE])
+@router.post(
+    "/{replay_id}/execute", response_model=ReplayResponse, dependencies=[_EXECUTE, _RATE_REPLAY]
+)
 async def execute_replay(
     project_id: uuid.UUID, replay_id: uuid.UUID, service: ServiceDep
 ) -> ReplayResponse:

@@ -503,3 +503,23 @@ class DuplicateProject(ConflictError):
         )
         self.organization_id = organization_id
         self.slug = slug
+
+
+class RateLimited(AgentABIError):
+    """Raised when a request exceeds a configured rate limit (Security
+    Phase D). Mapped to HTTP 429 with a `Retry-After` header — never
+    leaks the Redis key or the raw counter value, only the seconds
+    until the caller may retry."""
+
+    def __init__(self, *, retry_after_seconds: int) -> None:
+        super().__init__("Rate limit exceeded")
+        self.retry_after_seconds = retry_after_seconds
+
+
+class RateLimiterUnavailable(AgentABIError):
+    """Raised when Redis cannot be reached to evaluate a rate limit.
+    Fails the request rather than silently allowing it through
+    unchecked (spec §9's fail-closed policy). Mapped to HTTP 503."""
+
+    def __init__(self) -> None:
+        super().__init__("Rate limiter is temporarily unavailable")

@@ -1150,3 +1150,77 @@ make test` and `make infra-up` locally (or in an environment with normal
 network/Docker access) before treating Phase 1 as fully proven. Documented
 here rather than silently claimed as done, per the project's "no fake
 functionality" rule.
+
+## ADR-043 — Fixed-window Redis rate limiting, fail-closed on Redis failure (2026-09-14)
+
+Chose a fixed-window algorithm (key embeds `now // window_seconds`) over
+sliding-window/token-bucket: it needs one Redis key per (bucket,
+identity, window) with a plain `EXPIRE`, no sorted sets or background
+cleanup, and is exact enough for abuse protection at this scale. A Lua
+script (`EVAL`) combines `INCR` and a first-hit-only `EXPIRE` into one
+atomic operation, closing the race where two concurrent requests'
+separate `INCR`/`EXPIRE` calls could leave a key with no TTL. Verified
+for real against a local Redis server via raw `redis-cli EVAL` (the
+Python `redis` client is not installable in this sandbox): atomic
+increment, first-hit TTL set, threshold enforcement, independent
+principals, reset after expiry, and two independent `redis-cli`
+invocations incrementing the same key to prove cross-process/distributed
+correctness — all confirmed.
+
+Failure policy is fail-closed and singular, not configurable per
+endpoint: if Redis can't be reached, `RedisRateLimiter.check()` raises
+`RateLimiterUnavailable`, mapped to HTTP 503 — never silently letting
+rate-limited traffic through. An initial `rate_limit_fail_open` setting
+was removed before this phase shipped in favor of this one documented
+policy, per the spec's explicit allowance to centralize a single choice
+rather than build per-endpoint toggles nothing yet needs.
+
+## ADR-044 — Rate-limit identity: user id when authenticated, else trusted-proxy-aware client IP (2026-09-14)
+
+`rate_limit_by_user` keys on `AuthenticatedPrincipal.user_id` (already
+resolved by `get_current_user` for mutation/scan/replay routes — no
+extra auth cost). `rate_limit_by_client` (GitHub OAuth login/callback,
+which run before any AgentABI identity exists) keys on the direct ASGI
+peer address unless `TRUSTED_PROXY_COUNT` > 0, in which case the Nth
+`X-Forwarded-For` entry from the right is trusted instead. Default 0
+means "trust nothing from request headers" — correct for local dev and
+any deployment without a reverse proxy in front of the API; production
+behind exactly one trusted proxy (e.g. an ALB) sets this to 1. Never the
+full header as-is: every entry left of the trusted proxy's own appended
+entries is caller-supplied and trivially spoofable.
+
+## ADR-045 — Standardized error envelope; CSP intentionally not set at the API layer (2026-09-14)
+
+Every error response (domain exceptions, FastAPI/Pydantic validation
+errors, and unhandled exceptions) now returns
+`{"error": {"code", "message", "request_id"}}`, replacing the old
+`{"detail": ...}` shape. `request_id` is the correlation id
+`CorrelationIdMiddleware` now also sets on `request.state` (not just
+structlog's contextvars), read directly by the exception handlers in
+`app/api/v1/errors.py`. Domain exceptions map through a single
+class->`(status, code)` table instead of ~25 hand-written decorators;
+`RequestValidationError` omits the raw `input` value from each field
+error (never echoes back a submitted secret or oversized value); the
+catch-all `Exception` handler logs full detail server-side via
+`logger.exception()` and returns only a generic message + code +
+request_id to the client.
+
+`Content-Security-Policy` is deliberately not emitted anywhere in this
+API: it's a JSON API whose own `/docs` (Swagger UI) loads assets from a
+CDN, and a CSP strict enough to matter would break that. CSP ownership
+belongs to the frontend/reverse-proxy layer, not this service.
+`Strict-Transport-Security` is emitted only when `Settings.is_production`
+is true — never in local HTTP dev.
+
+## ADR-046 — Request-size limiting as raw ASGI middleware, not `BaseHTTPMiddleware` (2026-09-14)
+
+`RequestSizeLimitMiddleware` wraps the ASGI `receive` callable directly
+and counts each `http.request` chunk's byte length as it streams
+through, aborting with a 413 once `MAX_REQUEST_BODY_BYTES` is exceeded.
+`BaseHTTPMiddleware` was rejected because it must fully buffer the body
+to inspect it — exactly the cost a size limit exists to avoid — and
+that buffering would replace the request's body stream, breaking
+Security Phase E's planned GitHub webhook HMAC verification, which needs
+the exact raw bytes GitHub sent. This middleware never buffers or
+rewrites the body beyond counting, so the raw stream stays verifiable
+downstream in Phase E.
