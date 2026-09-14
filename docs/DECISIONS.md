@@ -2,6 +2,50 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-042 — Cross-tenant denial is 404; in-tenant permission denial is 403 (2026-09-14)
+
+**Context:** Security Phase C spec §7/§19 requires deciding, consistently,
+whether accessing another organization's resource returns 403 or 404, and
+warns against leaking "whether a foreign-tenant UUID exists."
+
+**Decision:** Two different HTTP statuses for two different situations,
+both raised by `AuthorizationService` (`app/authz/service.py`):
+`OrganizationAccessDenied`/`ProjectAccessDenied` (no membership at all in
+the resource's organization) map to **404**, deliberately identical to
+`ProjectNotFound` — a caller with no relationship to a tenant cannot tell
+whether the UUID they guessed belongs to a real project in another
+organization or doesn't exist at all. `PermissionDenied` (a verified
+member of the resource's organization, but their role lacks the specific
+permission) maps to **403** — the caller already knows this
+organization/project exists and that they belong to it, so naming the
+real reason (insufficient permission) doesn't leak any tenant-boundary
+information a 404 would otherwise hide. Applied consistently everywhere
+`AuthorizationService` is used — no route special-cases this.
+
+## ADR-041 — ADMIN gets no `MEMBERSHIP_MANAGE`, not a partial grant (2026-09-14)
+
+**Context:** Security Phase C spec §3 lists `MEMBERSHIP_MANAGE`-equivalent
+capabilities only under OWNER; separately, spec §16 says "ADMIN may be
+restricted from changing OWNER membership or ownership-sensitive
+settings," which could be read as ADMIN having *some* membership
+capability short of touching OWNER rows.
+
+**Decision:** `ROLE_PERMISSIONS["admin"]` (`app/authz/permissions.py`)
+excludes `MEMBERSHIP_MANAGE` entirely — ADMIN has no membership-mutation
+capability at all, not a scoped-down one. This is a strict reading of
+§3's base policy (which never grants ADMIN any membership action) and
+trivially satisfies §16's "restricted from OWNER-sensitive changes"
+(fully restricted is still restricted), without inventing a second,
+partial permission tier this codebase would then need to test and
+maintain. `app/authz/membership.py`'s `authorize_role_change` is the
+decision function a future membership-mutation route would call; no
+such route exists yet (documented as future work: `PATCH /organizations/
+{organization_id}/members/{user_id}`), so this is tested at the pure-
+function level (`tests/test_authz_membership.py`) rather than via HTTP.
+The same function also blocks demoting/removing an organization's last
+OWNER, closing the "org left with no one who can manage membership"
+failure mode.
+
 ## ADR-040 — Zero/multiple org memberships yield `organization_id=None`, never an automatic pick (2026-09-14)
 
 **Context:** Security Phase B spec §10: a GitHub-authenticated user may

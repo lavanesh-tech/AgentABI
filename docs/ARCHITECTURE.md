@@ -1025,3 +1025,127 @@ linking a second user to an already-linked `github_user_id` is rejected
 by the unique constraint, and downgrade cleanly removes both columns.
 Run `alembic upgrade head` against the full migration chain to confirm
 end-to-end.
+
+## Security Phase C: RBAC and Tenant Isolation
+
+```
+backend/
+  app/
+    authz/
+      permissions.py   # Permission enum + ROLE_PERMISSIONS (pure, no ORM)
+      membership.py     # authorize_role_change() — membership-mutation policy (pure)
+      context.py          # AuthorizationDecision — audit-prep struct (pure)
+      service.py            # AuthorizationService — the DB-backed decision point
+    api/deps/
+      authz.py         # require_project_permission()/require_organization_permission()
+    api/v1/
+      projects.py       # minimal Project CRUD — new, authorization-testing surface
+    services/
+      project_service.py # minimal Project CRUD business logic
+    repositories/
+      project_repository.py  # + get_for_organization, get_by_slug, list_by_organization, add
+    domain/exceptions.py  # + AuthorizationError, PermissionDenied,
+                           #   OrganizationAccessDenied, ProjectAccessDenied, DuplicateProject
+  tests/
+    test_authz_permissions.py       # pure — full role x permission matrix
+    test_authz_membership.py         # pure — membership-mutation policy
+    test_authz_service.py              # DB integration — stale-JWT, cross-org, removal
+    test_organization_isolation_api.py # HTTP integration — full isolation + role matrix
+```
+
+Authentication (Phases A/B) answers "who is this request from." Phase C
+answers "what is this identity allowed to do" — a separate question,
+deliberately: `AuthenticatedPrincipal` (Phase A) is unchanged, and
+nothing in Phase C touches how a JWT is issued or validated.
+
+### One dependency guards every project-scoped route
+
+Every existing project-scoped router (`components.py`, `compatibility.py`,
+`trajectories.py`, `replays.py`, `graph.py`) is already mounted under
+`/projects/{project_id}/...`. `require_project_permission(Permission.X)`
+(`app/api/deps/authz.py`) reads that same `project_id` path parameter,
+so one dependency factory, applied via `dependencies=[...]` on each
+route, authorizes all of them — no per-route authorization code, no
+resource-type-specific traversal logic. A component version, a scan, a
+trajectory event, a replay step never gets its own authorization
+dependency: it's only ever reached through a `project_id`-scoped route,
+and every repository already scopes its resource lookups by
+`project_id` (e.g. `ComponentRepository.get_by_id(project_id,
+component_id)`, from Phase 3), so a resource ID from another project
+can never resolve even after the project-level check passes. This is
+how `ComponentVersion -> Component -> Project -> Organization` and
+`Replay -> Project -> Organization` traversal (spec §9) is enforced
+without writing traversal code for each resource type.
+
+### Centralized permission model
+
+`app/authz/permissions.py` maps `OWNER > ADMIN > MEMBER` to explicit
+`Permission` sets — nothing anywhere compares `role ==
+OrganizationRole.ADMIN`. MEMBER is read-only across every
+organization-scoped resource; ADMIN adds every engineering write
+(create/update projects, register components, execute scans/replays,
+mutate the graph); OWNER adds `MEMBERSHIP_MANAGE`/`ORG_MANAGE`. Kept
+deliberately keyed by the role's string value, not the
+`OrganizationRole` enum itself, so this module stays dependency-free
+(no SQLAlchemy import) — see its docstring.
+
+### Role is reloaded from the database for the *resource's* organization
+
+Never `AuthenticatedPrincipal.role` (which reflects the JWT's `org_id`,
+possibly a different organization than the one being accessed) and
+never a caller-supplied `organization_id`. `AuthorizationService`
+resolves a project's `organization_id` from the database, then queries
+`OrganizationMember` fresh for that organization — every call is
+independently correct for its own target, so a role checked for
+organization A is never reused to authorize organization B (spec §18).
+This is why a demotion or membership removal in Postgres takes effect
+on a still-valid JWT's very next request, proven directly by
+`test_authz_service.py`'s stale-role and membership-removal tests
+(spec §25/§26 — extends ADR-038's same guarantee from role-reload to
+full authorization).
+
+### Cross-tenant denial is 404; in-tenant permission denial is 403
+
+See ADR-042.
+
+### Membership management: policy exists, no route yet
+
+`app/authz/membership.py`'s `authorize_role_change` is the decision
+function a future membership-mutation route would call — only OWNER
+may change any membership, and even OWNER cannot demote/remove an
+organization's last OWNER. No route exists yet (spec §16 explicitly
+scopes this to "authorization foundation," not a shipped API); the
+documented future route is `PATCH /organizations/{organization_id}/
+members/{user_id}`. See ADR-041 for why ADMIN gets no partial
+membership capability.
+
+### Audit preparation, not audit logging
+
+`AuthorizationService` builds a structured `AuthorizationDecision`
+(actor, organization, resource type/id, permission, allow/deny) on
+every check and logs it via the existing `structlog` setup — it is not
+persisted. Security Phase E adds the audit-event table and writes these
+rows there; Phase C only makes sure every field that table will need
+already exists as a typed value at the decision point (spec §20).
+
+### Verification in this session
+
+`app/authz/permissions.py` and `app/authz/membership.py` have no
+SQLAlchemy/FastAPI import, so they ran through the real `pytest` binary
+via `pytest --noconftest`: **19/19 new pure unit tests passed**
+(exhaustive role x permission cross-product, OWNER > ADMIN > MEMBER
+subset proof, membership-mutation policy incl. last-owner protection).
+Combined with every other pure test file in the suite, **208/208
+passed**, confirming no regression. `ruff format --check`/`ruff check`
+clean; `python3.12 -m py_compile` clean across `app`/`tests`; `mypy`
+fails on the same pre-existing `pydantic.mypy` error as every prior
+phase. `test_authz_service.py` (7 tests, incl. the mandated stale-JWT
+and membership-removal tests) and `test_organization_isolation_api.py`
+(17 tests: two-org/two-project isolation, direct-UUID-guessing, nested-
+resource isolation across components/scans/trajectories/replays, and
+the OWNER/ADMIN/MEMBER role matrix across project/component/scan/
+trajectory/graph endpoints) are written and `py_compile`-clean but need
+SQLAlchemy/FastAPI/httpx, unavailable this session — same bucket as
+`test_auth_api.py`. No migration was needed or created — Phase C adds
+no new columns/tables, only authorization logic and a minimal `Project`
+CRUD surface over the existing `projects` table.

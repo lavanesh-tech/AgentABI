@@ -16,6 +16,8 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps.authz import require_project_permission
+from app.authz.permissions import Permission
 from app.core.database import get_db_session
 from app.domain.enums import ComponentStatus, ComponentType
 from app.models.component import Component
@@ -23,6 +25,9 @@ from app.models.component_version import ComponentVersion
 from app.services.component_registry import ComponentRegistryService
 
 router = APIRouter(prefix="/projects/{project_id}/components", tags=["components"])
+
+_READ = Depends(require_project_permission(Permission.COMPONENT_READ))
+_WRITE = Depends(require_project_permission(Permission.COMPONENT_WRITE))
 
 _SLUG_PATTERN = r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
 
@@ -88,7 +93,12 @@ def get_registry_service(
 ServiceDep = Annotated[ComponentRegistryService, Depends(get_registry_service)]
 
 
-@router.post("", response_model=ComponentResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ComponentResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_WRITE],
+)
 async def create_component(
     project_id: uuid.UUID, payload: ComponentCreateRequest, service: ServiceDep
 ) -> Component:
@@ -101,7 +111,7 @@ async def create_component(
     )
 
 
-@router.get("", response_model=PageResponse[ComponentResponse])
+@router.get("", response_model=PageResponse[ComponentResponse], dependencies=[_READ])
 async def list_components(
     project_id: uuid.UUID,
     service: ServiceDep,
@@ -120,7 +130,7 @@ async def list_components(
     )
 
 
-@router.get("/{component_id}", response_model=ComponentResponse)
+@router.get("/{component_id}", response_model=ComponentResponse, dependencies=[_READ])
 async def get_component(
     project_id: uuid.UUID, component_id: uuid.UUID, service: ServiceDep
 ) -> Component:
@@ -131,6 +141,7 @@ async def get_component(
     "/{component_id}/versions",
     response_model=ComponentVersionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[_WRITE],
 )
 async def create_component_version(
     project_id: uuid.UUID,
@@ -147,7 +158,11 @@ async def create_component_version(
     )
 
 
-@router.get("/{component_id}/versions", response_model=PageResponse[ComponentVersionResponse])
+@router.get(
+    "/{component_id}/versions",
+    response_model=PageResponse[ComponentVersionResponse],
+    dependencies=[_READ],
+)
 async def list_component_versions(
     project_id: uuid.UUID,
     component_id: uuid.UUID,
@@ -168,14 +183,22 @@ async def list_component_versions(
 
 # Registered before the "/{version}" route below so a literal request for
 # "/versions/latest" is never swallowed by the "{version}" path parameter.
-@router.get("/{component_id}/versions/latest", response_model=ComponentVersionResponse)
+@router.get(
+    "/{component_id}/versions/latest",
+    response_model=ComponentVersionResponse,
+    dependencies=[_READ],
+)
 async def get_latest_component_version(
     project_id: uuid.UUID, component_id: uuid.UUID, service: ServiceDep
 ) -> ComponentVersion:
     return await service.get_latest_component_version(project_id, component_id)
 
 
-@router.get("/{component_id}/versions/{version}", response_model=ComponentVersionResponse)
+@router.get(
+    "/{component_id}/versions/{version}",
+    response_model=ComponentVersionResponse,
+    dependencies=[_READ],
+)
 async def get_component_version(
     project_id: uuid.UUID, component_id: uuid.UUID, version: str, service: ServiceDep
 ) -> ComponentVersion:

@@ -32,7 +32,7 @@ Security work (layered onto the phases above, tracked separately):
 |---|-----------------|--------|
 | A | Authentication foundation (JWT) | ✅ Done (see caveat in DECISIONS.md ADR-037) |
 | B | GitHub OAuth2 | ✅ Done (see caveats in DECISIONS.md ADR-039/040) |
-| C | RBAC / project authorization | ⬜ Not started |
+| C | RBAC / project authorization | ✅ Done (see ADR-041/042) |
 | D-F | (rate limiting, webhook security, audit, docs — as scoped when reached) | ⬜ Not started |
 
 ## Phase 1 notes
@@ -323,3 +323,42 @@ pytest-executed here — need SQLAlchemy/FastAPI/httpx.
 Run `make install && make lint && make typecheck && make test &&
 alembic upgrade head` locally to complete verification before starting
 Security Phase C.
+
+## Security Phase C notes
+
+RBAC and tenant isolation: `app/authz/permissions.py` maps OWNER >
+ADMIN > MEMBER to explicit `Permission` sets (MEMBER read-only; ADMIN
+adds engineering writes; OWNER adds membership/org management).
+`require_project_permission(Permission.X)` (`app/api/deps/authz.py`)
+authorizes against the `project_id` every project-scoped router already
+takes, applied via `dependencies=[...]` to components/compatibility/
+trajectories/replays/graph routes — no per-route authorization code,
+and nested resources inherit isolation for free since every repository
+already scopes lookups by `project_id`. `AuthorizationService`
+(`app/authz/service.py`) always reloads membership fresh from Postgres
+for the target resource's organization, never trusting
+`AuthenticatedPrincipal.role` or a caller-supplied org id. Cross-tenant
+denial is 404 (indistinguishable from not-found); in-tenant permission
+denial is 403 (ADR-042). A minimal `Project` CRUD API
+(`app/api/v1/projects.py`) ships as an authorization-testing surface.
+Membership-mutation policy (`app/authz/membership.py`) exists and is
+tested but has no route yet (ADR-041). Does not implement an audit-
+event table (Phase E), Redis rate limiting, or service-account auth —
+deferred.
+
+Same sandbox restriction as every prior phase. `app/authz/permissions.py`
+and `app/authz/membership.py` have no SQLAlchemy/FastAPI import and ran
+for real via `pytest --noconftest`: **19/19 new pure unit tests
+passed** (exhaustive role x permission matrix, membership policy incl.
+last-owner protection); combined with the full existing pure suite,
+**208/208 passed**, confirming no regression. `test_authz_service.py`
+(7 tests: stale-JWT, membership-removal, cross-org denial) and
+`test_organization_isolation_api.py` (17 tests: two-org isolation,
+nested-resource isolation, full role matrix) are written and
+`py_compile`-clean but not pytest-executed here — need SQLAlchemy/
+FastAPI/httpx. No migration was needed — Phase C adds no schema
+changes.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Security Phase D.
