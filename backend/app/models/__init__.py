@@ -11,6 +11,8 @@ from app.models.component import Component
 from app.models.component_version import ComponentVersion
 from app.models.differential_change import DifferentialChangeRecord
 from app.models.differential_report import DifferentialReportRecord
+from app.models.github_pr_analysis import GitHubPullRequestAnalysis
+from app.models.github_repository_mapping import GitHubRepositoryMapping
 from app.models.github_webhook_delivery import GitHubWebhookDelivery
 from app.models.organization import Organization
 from app.models.organization_member import OrganizationMember, OrganizationRole
@@ -32,6 +34,8 @@ __all__ = [
     "ComponentVersion",
     "DifferentialChangeRecord",
     "DifferentialReportRecord",
+    "GitHubPullRequestAnalysis",
+    "GitHubRepositoryMapping",
     "GitHubWebhookDelivery",
     "Organization",
     "OrganizationMember",

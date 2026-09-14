@@ -476,7 +476,57 @@ to complete verification before starting Phase 10.
 
 ## Phase 11 — Deterministic Risk Engine: COMPLETE
 
-## Phase 12 — GitHub PR / Release Integration: NEXT
+## Phase 12 — GitHub PR / Release Integration: COMPLETE
+
+## Phase 13 — Kafka Event Pipeline: NEXT
+
+Gemini (Phase 9) remains SKIPPED/OPTIONAL.
+
+## Phase 12 — GitHub PR / Release Integration: COMPLETE (detail)
+
+Adds `app/github/{checks_models,checks_client,checks_fake,check_mapping,
+pr_webhook_models,pr_analysis_models}.py`, `app/models/
+{github_repository_mapping,github_pr_analysis}.py`, migration 0010,
+`app/repositories/{github_repository_mapping_repository,
+github_pr_analysis_repository}.py`, `app/services/
+{github_pr_analysis_service,github_repository_mapping_service}.py`,
+`app/api/v1/github_repositories.py`, an additive dispatch step in the
+existing `app/api/v1/github_webhook.py` route, 10 new domain exceptions,
+4 new audit actions, and two new centralized permissions
+(`GITHUB_INTEGRATION_READ`/`GITHUB_INTEGRATION_MANAGE`). Turns a GitHub
+`pull_request` webhook into a deterministic Compatibility->Risk pipeline
+run and publishes the PASS/WARN/BLOCK result back as a GitHub check run
+— GitHub computes nothing; AgentABI's existing deterministic engines
+remain solely authoritative. See docs/ARCHITECTURE.md's Phase 12 section
+and docs/DECISIONS.md ADR-058 through ADR-062.
+
+Same sandbox restriction as every prior phase: `pytest-asyncio` and
+SQLAlchemy aren't installable here. Pure logic ran for real via `pytest
+--noconftest`: check-conclusion mapping exhaustiveness and summary
+content/distinctness, and webhook-payload parsing (supported/unsupported
+actions, malformed/missing-field payloads) against a new sanitized
+sample fixture (`tests/fixtures/github_pull_request_opened.json`) —
+**28/28 passed**. Full sweep across every pure-runnable test in
+`tests/`: **341 passed**, no new failures beyond the pre-existing async/
+FastAPI-dependent gaps every phase already documents (confirmed `tests/
+test_authz_permissions.py` still 12/12 green after the two new
+permissions). `ruff format --check`/`ruff check` clean; `python3.12 -m
+py_compile` clean across `app`/`tests`/`alembic`; `mypy` unavailable (`No
+module named mypy`), same as every phase. `tests/
+test_github_checks_client_fake.py` (async, `FakeGitHubChecksClient`) and
+`tests/test_github_pr_analysis_service.py` (real-Postgres integration,
+including the mandatory stale-SHA test) are written/`py_compile`-clean,
+not pytest-executed (need `pytest-asyncio`/SQLAlchemy); no dedicated
+`test_github_repository_mapping_api.py`, following Phase 10/11's own
+precedent. No real GitHub credentials exist in this environment — the
+live GitHub Checks API smoke test was honestly skipped, never
+fabricated.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Phase 13.
+
+## Phase 11 — Deterministic Risk Engine: COMPLETE (detail)
 
 Adds `app/risk/` (models, rules, engine — all dependency-free/pure),
 `app/models/risk_{assessment,rule_result}.py`, migration 0009,

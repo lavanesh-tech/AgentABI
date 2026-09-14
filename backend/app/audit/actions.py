@@ -22,3 +22,7 @@ class AuditAction(enum.StrEnum):
     REPLAY_TRIGGERED = "replay_triggered"
     GITHUB_WEBHOOK_PROCESSED = "github_webhook_processed"
     GITHUB_WEBHOOK_REJECTED = "github_webhook_rejected"
+    GITHUB_PR_ANALYSIS_STARTED = "github_pr_analysis_started"
+    GITHUB_PR_ANALYSIS_COMPLETED = "github_pr_analysis_completed"
+    GITHUB_CHECK_PUBLISHED = "github_check_published"
+    GITHUB_CHECK_FAILED = "github_check_failed"

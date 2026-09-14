@@ -117,6 +117,21 @@ class Settings(BaseSettings):
     github_app_id: str | None = None
     github_private_key: str | None = None
 
+    # `github_checks_token` (Phase 12): a pre-provisioned GitHub App
+    # installation access token (or a fine-grained PAT with `checks:write`)
+    # used to call the Checks API. A true GitHub-App-JWT installation-
+    # token exchange needs RS256 (RSA) signing, which needs a crypto
+    # dependency this sandbox cannot install (same PyPI-403 restriction
+    # documented for every prior phase, and the exact reason
+    # `app/auth/jwt.py` hand-rolls HS256 instead of using PyJWT) — so
+    # Phase 12 reads a statically configured token via
+    # `GitHubCredentialProvider` (app/github/checks_models.py), a Protocol
+    # boundary a real `github_app_id`/`github_private_key`-based token
+    # exchange can implement later without touching any caller. Empty
+    # means "not configured" — `GitHubChecksClient` calls fail with
+    # `GitHubAuthenticationFailed` rather than sending an empty token.
+    github_checks_token: str | None = None
+
     # --- JWT authentication (Security Phase A) -------------------------------
     # No real secret ships here or in .env.example — only a local-dev
     # default so `local`/`test` work without setup. Production must set

@@ -17,6 +17,8 @@ _MEMBER_READ_ONLY = {
     Permission.DIFFERENTIAL_READ,
     # Phase 11 spec §25: MEMBER may read risk assessments.
     Permission.RISK_READ,
+    # Phase 12 spec §34: MEMBER may read GitHub repository mappings.
+    Permission.GITHUB_INTEGRATION_READ,
 }
 
 _ENGINEERING_WRITES = {
@@ -33,6 +35,8 @@ _ENGINEERING_WRITES = {
     Permission.DIFFERENTIAL_EXECUTE,
     # Phase 11 spec §25: ADMIN may execute risk assessments.
     Permission.RISK_EXECUTE,
+    # Phase 12 spec §34: ADMIN may create/delete GitHub repository mappings.
+    Permission.GITHUB_INTEGRATION_MANAGE,
 }
 
 _GOVERNANCE = {Permission.MEMBERSHIP_MANAGE, Permission.ORG_MANAGE}

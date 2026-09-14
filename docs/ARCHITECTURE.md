@@ -1554,3 +1554,114 @@ executed; no dedicated `test_risk_api.py` was added, following Phase
 10's own precedent of relying on service-level tests plus the
 centralized-permission unit tests where FastAPI/httpx aren't
 executable in this sandbox.
+
+## Phase 12: GitHub PR / Release Integration
+
+**Flow**: GitHub `pull_request` webhook (`opened`/`synchronize`/
+`reopened` only — every other action is safely ignored, not an error)
+-> Security Phase E's existing HMAC/idempotency/rate-limit validation in
+`GitHubWebhookService.process()` (unchanged) -> a new additive dispatch
+step in the webhook route (`app/api/v1/github_webhook.py`) resolves the
+PR event and, only for a newly-accepted `pull_request` delivery, invokes
+`GitHubPullRequestAnalysisService.analyze_pull_request` -> Phase 5
+`CompatibilityService.run_scan` -> Phase 11 `RiskService.run_assessment`
+-> `decision_to_conclusion` -> a GitHub check run published via the
+`GitHubChecksClient` Protocol. GitHub receives only the already-computed
+deterministic PASS/WARN/BLOCK result; nothing in this phase computes
+compatibility, differential, or risk itself — see ADR-059 for why
+Replay/Differential are deliberately not wired into this pipeline yet.
+
+**Repository mapping**: `GitHubRepositoryMapping` (migration 0010) keys
+a GitHub repository to an AgentABI project by GitHub's immutable numeric
+`github_repository_id` (never `owner/repo`, which changes on rename/
+transfer). It also carries the explicit analysis contract (ADR-060):
+`component_id` (required to start analysis) and an optional
+`baseline_version` (defaults to the component's latest registered
+`ComponentVersion`). Managed via `POST/GET/DELETE /api/v1/projects/
+{project_id}/github/repositories[/{mapping_id}]`
+(`app/api/v1/github_repositories.py`), gated by two new centralized
+permissions, `GITHUB_INTEGRATION_READ` (any membership) and
+`GITHUB_INTEGRATION_MANAGE` (ADMIN/OWNER) — never a scattered ad-hoc
+role check.
+
+**Exact-SHA pinning (stale-result protection, spec §25)**: every
+`GitHubPullRequestAnalysis` row (migration 0010) is created with, and
+permanently pinned to, the exact `head_sha` of the commit it analyzes —
+never reassigned. Every check-run create/update call always uses
+`analysis.head_sha`, never a "latest" or externally-passed current
+value, so an older commit's analysis completing after a newer commit's
+analysis can never overwrite or be confused with the newer commit's
+check (GitHub's Checks API itself associates a check run with the exact
+SHA given at creation). A `synchronize` event with a new `head_sha`
+always produces a new logical analysis row; historical rows remain
+auditable, never deleted or overwritten. Idempotency key: `(github_
+repository_id, pull_request_number, head_sha, analysis_version)` — a
+database unique constraint, checked before any pipeline work begins, so
+a redelivered webhook for an already-analyzed commit reuses the
+existing row rather than recomputing or republishing.
+
+**Check conclusion mapping**: centralized and exhaustively tested in
+`app/github/check_mapping.py` — `decision_to_conclusion` is a total
+function over every `RiskDecision` member (PASS->success, WARN->neutral,
+BLOCK->failure); the LLM never chooses a conclusion (spec §12). The
+check body (`build_completed_output`) is concise markdown — decision,
+score, engine version, hard-block flag, up to 5 top triggered rules,
+compatibility summary, never a raw JSON evidence dump. WARN's summary
+explicitly states "AgentABI decision: WARN" and is textually distinct
+from PASS's; PASS's summary never claims zero risk, only that no
+configured threshold was exceeded; BLOCK's summary states the score and
+whether a hard-block rule fired. An optional Phase 8 OpenAI explanation
+may be appended verbatim as its own section — it never influences
+`decision`/`score` and is never required to publish a check.
+
+**Credential boundary**: see ADR-058. `GitHubCredentialProvider` is a
+separate Protocol from Phase B's OAuth login flow — a user's OAuth
+access token is never reused as a permanent integration credential.
+`HttpxGitHubChecksClient` never logs an Authorization header, access
+token, or webhook secret; a `GitHubAPIUnavailable`/`GitHubAuthentication
+Failed`/`GitHubCheckPublishFailed` error carries only a sanitized
+message.
+
+**Failure isolation (spec §28)**: deterministic evidence is committed to
+the database *before* any GitHub publish attempt — `RiskAssessmentRecord`
+is never recomputed or mutated because a check-run publish failed. A
+publish failure sets `GitHubPullRequestAnalysis.status =
+PUBLISH_FAILED` with a sanitized `publish_error`, safely retryable
+later, never silently reported as success.
+
+**Persistence**: `GitHubPullRequestAnalysis` (migration 0010) is
+deliberately *not* immutable-once-created, unlike `differential_reports`/
+`risk_assessments` — see ADR-061. Audit actions `GITHUB_PR_ANALYSIS_
+STARTED`/`GITHUB_PR_ANALYSIS_COMPLETED`/`GITHUB_CHECK_PUBLISHED`/
+`GITHUB_CHECK_FAILED` are recorded with only safe identifiers (project
+id, repository id, PR number, head SHA, risk assessment id, decision) —
+never a token.
+
+**Route wiring**: see ADR-062 — the PR-analysis dispatch lives outside
+`GitHubWebhookService.process()`, additive and exception-isolated, so
+every already-passing Security Phase E webhook test stays at zero
+regression risk.
+
+**Verification**: pure logic ran for real via `pytest --noconftest` —
+`tests/test_github_check_mapping.py` (conclusion-mapping exhaustiveness,
+PASS/WARN/BLOCK summary content and distinctness, top-rules truncation)
+and `tests/test_github_pr_webhook_models.py` (supported/unsupported
+actions, malformed/missing-field payloads, the new `tests/fixtures/
+github_pull_request_opened.json` sample fixture) — **28/28 passed**.
+Full regression sweep: **341 passed**, no new failures beyond the
+pre-existing async/FastAPI-dependent gaps every phase already documents
+(confirmed `tests/test_authz_permissions.py` still 12/12 green after the
+two new GitHub permissions). `tests/test_github_checks_client_fake.py`
+(async, `FakeGitHubChecksClient`-based) and `tests/
+test_github_pr_analysis_service.py` (real-Postgres integration,
+including the mandatory stale-SHA test, spec §25/§37) are written and
+`py_compile`-clean but need `pytest-asyncio`/SQLAlchemy, not installed
+here — not executed; no dedicated `test_github_repository_mapping_api.
+py` was added, following Phase 10/11's own precedent of relying on
+service-level tests plus the centralized-permission unit tests where
+FastAPI/httpx aren't executable in this sandbox. `ruff format --check`/
+`ruff check` clean; `python3.12 -m py_compile` clean across `app`/
+`tests`/`alembic`; `mypy` unavailable (`No module named mypy`), same as
+every phase. No real GitHub credentials exist in this environment, so no
+live GitHub Checks API smoke test was performed — honestly skipped, not
+fabricated.
