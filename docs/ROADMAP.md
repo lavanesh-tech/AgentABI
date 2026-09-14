@@ -478,9 +478,66 @@ to complete verification before starting Phase 10.
 
 ## Phase 12 — GitHub PR / Release Integration: COMPLETE
 
-## Phase 13 — Kafka Event Pipeline: NEXT
+## Phase 13 — Kafka Event Pipeline: COMPLETE
+
+## Phase 14 — Frontend Dashboard: NEXT
 
 Gemini (Phase 9) remains SKIPPED/OPTIONAL.
+
+## Phase 13 — Kafka Event Pipeline: COMPLETE (detail)
+
+Adds `app/events/` (envelope, errors, analysis_events, publisher,
+fake_publisher, kafka_publisher, handler, factory — all dependency-free
+except `kafka_publisher.py`/`factory.py`, which import `aiokafka` only
+lazily/at their own module scope), `app/kafka/` (consumer, worker,
+analysis_handler), a `start_analysis`/`run_analysis` split in `app/
+services/github_pr_analysis_service.py`, a `KAFKA_ENABLED` branch in
+`app/api/v1/github_webhook.py`'s dispatch step, a `kafka` readiness
+check, 4 new audit actions, 1 new domain exception
+(`GitHubAnalysisHeadShaMismatch`), the `aiokafka` dependency, and a
+`make worker` target. Decouples event ingestion from analysis execution
+via two Kafka topics (`agentabi.analysis.requests`/`.results`, plus a
+`.dlq`) without moving any compatibility/risk logic into producers or
+consumers — Phase 5/11's deterministic engines remain the sole source of
+`decision`/`score`. See docs/ARCHITECTURE.md's Phase 13 section and
+docs/DECISIONS.md ADR-063 through ADR-068.
+
+Same sandbox restriction as every prior phase: `pytest-asyncio`,
+SQLAlchemy, and (new this phase) `aiokafka`/`orjson` aren't installable
+here — `app/events/envelope.py` deliberately uses stdlib `json` instead
+of the already-declared `orjson` specifically so its serialization logic
+could still run for real (ADR-068). Pure logic ran for real via `pytest
+--noconftest`: event envelope construction/serialization/version
+validation/round-trip (`tests/test_events_envelope.py`) and the full
+analysis-event taxonomy including partition-key stability and the
+no-secrets-in-schema assertion (`tests/test_events_analysis_events.py`)
+— **28/28 passed**. Full sweep across every pure-runnable test in
+`tests/`: **369 passed** (up from Phase 12's 341), no new failures
+beyond the pre-existing async/FastAPI-dependent gaps every phase already
+documents. `ruff format --check`/`ruff check` clean; `python3.12 -m
+py_compile` clean across `app`/`tests`/`alembic`; `mypy` unavailable (`No
+module named mypy`), same as every phase. `tests/test_events_fake_
+publisher.py`, `tests/test_kafka_analysis_handler.py` (real-Postgres,
+incl. duplicate-event idempotency and version/unknown-id rejection), and
+new Phase 13 cases in `tests/test_github_pr_analysis_service.py`
+(`start_analysis`/`run_analysis` split, head_sha-mismatch rejection —
+the Phase 13 mandatory stale-SHA test, spec §38 — redelivery
+idempotency, PUBLISH_FAILED retry-without-recompute) are written/
+`py_compile`-clean, not pytest-executed (need `pytest-asyncio`/
+SQLAlchemy). `app/kafka/consumer.py`/`app/events/kafka_publisher.py`
+(both `aiokafka`-dependent) are written/`py_compile`-clean only; no
+dedicated consumer unit test file, since the sandbox can't import
+`aiokafka` at all — its retry/DLQ/poison-message classification logic is
+documented in ARCHITECTURE.md and exercised indirectly through
+`AnalysisRequestHandler`'s executable-elsewhere tests, which cover the
+actual domain-error-to-retry-policy classification the consumer
+dispatches on. No live Kafka broker exists in this environment — the
+optional real-Kafka smoke test (spec §41) was honestly skipped, never
+fabricated.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Phase 14.
 
 ## Phase 12 — GitHub PR / Release Integration: COMPLETE (detail)
 

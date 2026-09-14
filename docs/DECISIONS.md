@@ -2,6 +2,95 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-068 — `json`, not `orjson`, for event serialization even though `orjson` is an existing declared dependency (2026-09-15)
+
+`app/events/envelope.py` needs deterministic (sorted-key) JSON
+serialization for the Kafka event schema (spec §5/§23), and `orjson` is
+already listed in `pyproject.toml` — but it is not installable in this
+sandbox (same PyPI restriction as every other compiled dependency), and
+this module is exactly the one Phase 13 needs to stay `pytest
+--noconftest`-executable for its mandatory pure event-schema tests (spec
+§35). Using stdlib `json.dumps(..., sort_keys=True, separators=(",",
+":"))` instead keeps `serialize_envelope`/`deserialize_envelope`
+runnable for real in this environment at zero behavioral cost — both
+produce deterministic, compact JSON; `orjson` remains declared for
+whatever future use it was originally added for, untouched.
+
+## ADR-067 — Two-topic strategy: `agentabi.analysis.requests` / `agentabi.analysis.results`, plus one DLQ topic (2026-09-15)
+
+Spec §7 explicitly warns against a topic per project/organization/PR/
+event-subtype. Three event types (`requested`/`completed`/`failed`)
+collapse to two topics by direction — requests flow one way, results
+(both completed and failed) flow the other — via `app/events/publisher.
+resolve_topic`, keyed off `event_type` rather than any per-tenant value.
+A third topic, `agentabi.analysis.dlq`, holds messages that exhausted
+retries or failed permanently (spec §21). Local Kafka relies on the
+Bitnami image's default auto-create-topics behavior (`docker-compose.
+yml`'s `kafka` service does not set `KAFKA_CFG_AUTO_CREATE_TOPICS_
+ENABLE`, so it stays at Kafka's own default of `true`) — explicit
+topic provisioning is deferred to Terraform (a later phase), matching
+spec §33's "do not overengineer production topic provisioning yet."
+
+## ADR-066 — Partition key `github_repository_id:pull_request_number`; exact-SHA check remains the actual safety mechanism, not partition ordering (2026-09-15)
+
+Spec §24/§25: all three event types for one PR share a partition key
+(`app/events/analysis_events.partition_key`), so Kafka's per-partition
+ordering guarantee at least *tends* to keep same-PR events in commit
+order. This is deliberately treated as a convenience, not a guarantee
+relied upon for correctness — a worker crash-and-redeliver, a consumer
+group rebalance, or simple concurrent workers can still process events
+out of order. The actual safety mechanism is structural: `GitHubPullRequestAnalysisService.run_analysis`'s exact-`head_sha` check (see ADR-065)
+holds regardless of delivery order, which is why the mandatory stale-SHA
+test (spec §38) constructs the out-of-order scenario directly rather
+than relying on partition behavior to prevent it.
+
+## ADR-065 — Kafka's at-least-once delivery: idempotency via persisted analysis status, not a separate dedup table (2026-09-15)
+
+Spec §17 requires idempotent consumers under Kafka's at-least-once
+semantics. Rather than track processed `event_id`s in a new table,
+`GitHubPullRequestAnalysisService.run_analysis` reuses the persisted
+`GitHubPullRequestAnalysis.status` state machine already introduced in
+Phase 12: COMPLETED is a no-op on redelivery, FAILED is not auto-retried
+(spec §20 — permanent errors aren't retried indefinitely), and
+PUBLISH_FAILED retries the check *publish* only, reusing the already-
+computed `risk_assessment_id`/`compatibility_scan_id` rather than
+recomputing them (spec §28). This piggybacks on Phase 12's existing
+`(github_repository_id, pull_request_number, head_sha, analysis_version)`
+unique constraint for request-side idempotency (redelivered webhooks)
+and adds status-based idempotency for the worker side (redelivered Kafka
+messages) — no new schema.
+
+## ADR-064 — `start_analysis`/`run_analysis` split lets `KAFKA_ENABLED` toggle without duplicating the Phase 12 pipeline (2026-09-15)
+
+`GitHubPullRequestAnalysisService.analyze_pull_request` (Phase 12's
+original single entrypoint) is now `start_analysis` (validate mapping,
+persist a PENDING row — cheap, safe to run on the webhook request
+thread) immediately followed by `run_analysis` (the actual compatibility
+-> risk -> check-publish pipeline). `KAFKA_ENABLED=false` calls both
+inline, in the same request, reproducing Phase 12's exact prior
+behavior byte-for-byte; `KAFKA_ENABLED=true` calls `start_analysis` on
+the webhook thread, publishes an event, and lets `app.kafka.worker` call
+`run_analysis` later. This means the deterministic pipeline logic exists
+in exactly one place regardless of which mode is active — no duplicated
+"sync path" vs. "async path" implementation of compatibility/risk/check-
+publishing (spec §3/§15).
+
+## ADR-063 — `KAFKA_ENABLED` defaults to `false`; Kafka client construction is fully lazy (2026-09-15)
+
+Spec §12 requires the deterministic core to keep working without Kafka,
+and that Kafka must not make app startup fail unnecessarily in local/
+unit-test scenarios. `Settings.kafka_enabled: bool = False` is the
+default for every environment unless explicitly overridden.
+`app/events/factory.get_event_publisher` and `app/core/readiness.
+check_kafka_connection` both import `app.events.kafka_publisher`
+(which imports `aiokafka`) lazily, inside function bodies, never at
+module scope — so a process that never sets `KAFKA_ENABLED=true` never
+needs `aiokafka` importable at all, matching every other optional/
+uninstallable dependency's precedent in this sandbox (`httpx`, `openai`,
+`neo4j`, `redis`). `/ready`'s `kafka` check returns `True` immediately
+when disabled (spec §31) rather than skipping the key from the response
+— an explicit, visible "not applicable," not a silent omission.
+
 ## ADR-062 — PR-analysis dispatch lives in the webhook route, not inside `GitHubWebhookService.process()` (2026-09-14)
 
 Phase 12 wires GitHub PR analysis into the existing Security-Phase-E

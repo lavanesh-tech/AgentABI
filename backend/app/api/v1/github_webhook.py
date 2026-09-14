@@ -16,6 +16,14 @@ failure must never turn a successfully-recorded webhook delivery into a
 non-202 response (spec §28): GitHub only needs to know the delivery was
 received; the check result is a separate, independently-retryable
 artifact visible on the PR itself.
+
+Phase 13 (spec §13) adds the `KAFKA_ENABLED` branch inside that same
+dispatch step: `false` keeps running the full deterministic pipeline
+inline on this request (exactly Phase 12's behavior — the default, and
+every local/unit-test default); `true` only persists the PENDING
+analysis row and publishes an `github.pr.analysis.requested` event,
+returning immediately — `app.kafka.worker` performs the actual pipeline
+off this request thread.
 """
 
 from typing import Annotated
@@ -26,11 +34,15 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.rate_limit import rate_limit_by_client
+from app.audit.actions import AuditAction
 from app.core.config import Settings, get_settings
 from app.core.database import get_db_session
 from app.domain.exceptions import AgentABIError
+from app.events.analysis_events import build_analysis_requested_event
+from app.events.factory import get_event_publisher
 from app.github.checks_client import HttpxGitHubChecksClient, StaticGitHubCredentialProvider
 from app.github.pr_webhook_models import parse_pull_request_event
+from app.services.audit_service import AuditService
 from app.services.github_pr_analysis_service import GitHubPullRequestAnalysisService
 from app.services.webhook_service import GitHubWebhookService
 
@@ -124,9 +136,44 @@ async def _dispatch_pr_analysis(
             StaticGitHubCredentialProvider(settings.github_checks_token)
         )
         pr_service = GitHubPullRequestAnalysisService(session, checks_client=checks_client)
-        await pr_service.analyze_pull_request(
-            payload, delivery_id=delivery_id, request_id=request_id
-        )
+
+        if settings.kafka_enabled:
+            analysis = await pr_service.start_analysis(
+                payload, delivery_id=delivery_id, request_id=request_id
+            )
+            mapping = await pr_service.get_repository_mapping(analysis.github_repository_id)
+            event = build_analysis_requested_event(
+                github_pr_analysis_id=str(analysis.id),
+                project_id=str(analysis.project_id),
+                organization_id=str(analysis.organization_id),
+                github_repository_id=analysis.github_repository_id,
+                pull_request_number=analysis.pull_request_number,
+                head_sha=analysis.head_sha,
+                base_sha=analysis.base_sha,
+                component_id=(
+                    str(mapping.component_id) if mapping and mapping.component_id else None
+                ),
+                baseline_version=mapping.baseline_version if mapping else None,
+                correlation_id=request_id or delivery_id,
+            )
+            await get_event_publisher(settings).publish(event)
+            AuditService(session).record(
+                action=AuditAction.KAFKA_ANALYSIS_ENQUEUED,
+                organization_id=analysis.organization_id,
+                resource_type="github_pr_analysis",
+                resource_id=analysis.id,
+                request_id=request_id,
+                metadata={
+                    "project_id": str(analysis.project_id),
+                    "head_sha": analysis.head_sha,
+                    "topic": settings.kafka_analysis_request_topic,
+                },
+            )
+            await session.commit()
+        else:
+            await pr_service.analyze_pull_request(
+                payload, delivery_id=delivery_id, request_id=request_id
+            )
     except AgentABIError as exc:
         logger.warning(
             "github_pr_analysis_failed",
