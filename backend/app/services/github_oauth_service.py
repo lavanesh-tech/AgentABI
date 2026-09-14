@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actions import AuditAction
 from app.auth.jwt import encode_token
 from app.auth.oauth_state import OAuthStateStore, generate_state
 from app.core.config import Settings
@@ -22,6 +23,7 @@ from app.github.oauth_models import GitHubOAuthClient
 from app.models.organization_member import OrganizationRole
 from app.repositories.organization_member_repository import OrganizationMemberRepository
 from app.repositories.user_repository import UserRepository
+from app.services.audit_service import AuditService
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,7 @@ class GitHubOAuthService:
         self._github_client = github_client
         self._users = UserRepository(session)
         self._memberships = OrganizationMemberRepository(session)
+        self._audit = AuditService(session)
 
     async def start_login(self) -> GitHubLoginStart:
         state = generate_state()
@@ -79,9 +82,14 @@ class GitHubOAuthService:
         # old callback URL must not get a different, more informative
         # failure than someone who guessed a state value.
         if not state or not await self._state_store.consume(state):
+            # No user identity exists yet at this point — audited with
+            # actor_user_id/organization_id=None (spec §19/§20). Never
+            # the state value itself, only that validation failed.
+            await self._record_login_failure("invalid_state")
             raise OAuthStateInvalid()
 
         if error:
+            await self._record_login_failure("authorization_denied")
             raise GitHubAuthorizationDenied()
         if not code:
             raise MissingAuthorizationCode()
@@ -126,6 +134,15 @@ class GitHubOAuthService:
             organization_id=str(organization_id) if organization_id else None,
         )
 
+        self._audit.record(
+            action=AuditAction.LOGIN_SUCCESS,
+            organization_id=organization_id,
+            actor_user_id=user.id,
+            resource_type="user",
+            resource_id=user.id,
+            metadata={"github_login": identity.github_login},
+        )
+
         return GitHubCallbackResult(
             access_token=access_token,
             user_id=user.id,
@@ -134,3 +151,12 @@ class GitHubOAuthService:
             role=role,
             requires_onboarding=len(memberships) == 0,
         )
+
+    async def _record_login_failure(self, reason: str) -> None:
+        # Committed immediately (not left for the request's normal
+        # auto-commit) because the caller raises right after this —
+        # `app.core.database.get_db_session` rolls back on any
+        # exception, which would otherwise discard the audit write too
+        # (mirrors `GitHubWebhookService`'s rejection-audit pattern).
+        self._audit.record(action=AuditAction.LOGIN_FAILURE, metadata={"reason": reason})
+        await self._session.commit()

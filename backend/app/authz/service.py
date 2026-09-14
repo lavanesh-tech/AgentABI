@@ -18,6 +18,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actions import AuditAction
 from app.auth.principal import AuthenticatedPrincipal
 from app.authz.context import AuthorizationDecision
 from app.authz.permissions import Permission, role_has_permission
@@ -32,14 +33,17 @@ from app.models.organization_member import OrganizationMember
 from app.models.project import Project
 from app.repositories.organization_member_repository import OrganizationMemberRepository
 from app.repositories.project_repository import ProjectRepository
+from app.services.audit_service import AuditService
 
 logger = get_logger(__name__)
 
 
 class AuthorizationService:
     def __init__(self, session: AsyncSession) -> None:
+        self._session = session
         self._members = OrganizationMemberRepository(session)
         self._projects = ProjectRepository(session)
+        self._audit = AuditService(session)
 
     async def authorize_organization_access(
         self,
@@ -77,6 +81,9 @@ class AuthorizationService:
                 organization_id,
                 permission,
                 False,
+            )
+            await self._record_denial(
+                principal.user_id, organization_id, "organization", organization_id, permission
             )
             raise PermissionDenied()
 
@@ -127,12 +134,38 @@ class AuthorizationService:
             self._log_decision(
                 principal.user_id, project.organization_id, "project", project_id, permission, False
             )
+            await self._record_denial(
+                principal.user_id, project.organization_id, "project", project_id, permission
+            )
             raise PermissionDenied()
 
         self._log_decision(
             principal.user_id, project.organization_id, "project", project_id, permission, True
         )
         return project, membership
+
+    async def _record_denial(
+        self,
+        actor_user_id: uuid.UUID,
+        organization_id: uuid.UUID,
+        resource_type: str,
+        resource_id: uuid.UUID,
+        permission: Permission,
+    ) -> None:
+        # Committed immediately, not left for the route's normal
+        # auto-commit (`app.core.database.get_db_session`), because the
+        # caller raises `PermissionDenied` right after this — which
+        # would otherwise roll back this audit write too (spec §19,
+        # mirrors `GitHubWebhookService`'s rejection-audit pattern).
+        self._audit.record(
+            action=AuditAction.AUTHORIZATION_DENIED,
+            organization_id=organization_id,
+            actor_user_id=actor_user_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            metadata={"permission": permission.value},
+        )
+        await self._session.commit()
 
     @staticmethod
     def _log_decision(

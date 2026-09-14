@@ -39,6 +39,7 @@ class Permission(enum.StrEnum):
     GRAPH_WRITE = "graph:write"
     MEMBERSHIP_MANAGE = "membership:manage"
     ORG_MANAGE = "org:manage"
+    AUDIT_READ = "audit:read"
 
 
 # MEMBER: least-privilege, read-only across every organization-scoped
@@ -67,6 +68,11 @@ _ADMIN_PERMISSIONS: frozenset[Permission] = _MEMBER_PERMISSIONS | frozenset(
         Permission.TRAJECTORY_WRITE,
         Permission.REPLAY_EXECUTE,
         Permission.GRAPH_WRITE,
+        # Security Phase E spec §17: ADMIN may read the organization's
+        # audit trail (a privileged engineering/security action, same
+        # bucket as SCAN_EXECUTE/REPLAY_EXECUTE) — only membership
+        # management/org management stay OWNER-only.
+        Permission.AUDIT_READ,
     }
 )
 

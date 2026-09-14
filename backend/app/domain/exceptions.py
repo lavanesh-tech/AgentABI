@@ -523,3 +523,60 @@ class RateLimiterUnavailable(AgentABIError):
 
     def __init__(self) -> None:
         super().__init__("Rate limiter is temporarily unavailable")
+
+
+class WebhookSignatureError(AgentABIError):
+    """Base class for every GitHub webhook signature failure mode
+    (Security Phase E spec §6). Deliberately one uniform message/code
+    for missing, malformed, and invalid signatures — mirrors
+    `InvalidToken`'s ADR-032 precedent, so a caller can never learn
+    *which* validation step failed. Mapped to HTTP 401."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid webhook signature")
+
+
+class MissingWebhookSignature(WebhookSignatureError):
+    pass
+
+
+class MalformedWebhookSignature(WebhookSignatureError):
+    pass
+
+
+class InvalidWebhookSignature(WebhookSignatureError):
+    pass
+
+
+class GitHubWebhookNotConfigured(AgentABIError):
+    """Raised when `GITHUB_WEBHOOK_SECRET` is unset. Failing explicitly
+    is safer than accepting webhooks nothing can actually verify.
+    Mapped to HTTP 503."""
+
+    def __init__(self) -> None:
+        super().__init__("GitHub webhook processing is not configured")
+
+
+class MissingWebhookDeliveryId(AgentABIError):
+    """Raised when a signature-valid webhook request has no
+    `X-GitHub-Delivery` header — every real GitHub delivery carries one,
+    so its absence means a malformed or non-GitHub caller. Mapped to
+    HTTP 400."""
+
+    def __init__(self) -> None:
+        super().__init__("Missing X-GitHub-Delivery header")
+
+
+class WebhookDeliveryConflict(ConflictError):
+    """Raised when an incoming delivery reuses an already-recorded
+    `X-GitHub-Delivery` id with a *different* payload hash than what was
+    first recorded for it — a genuine anomaly (GitHub does not reuse
+    delivery ids for different payloads), not an ordinary retry. Mapped
+    to HTTP 409. An identical-hash redelivery is instead idempotent (spec
+    §9) and never raises."""
+
+    def __init__(self, delivery_id: str) -> None:
+        super().__init__(
+            f"Webhook delivery {delivery_id!r} was already recorded with different content"
+        )
+        self.delivery_id = delivery_id

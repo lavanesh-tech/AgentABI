@@ -98,6 +98,26 @@ CREATE TRIGGER trg_replay_steps_immutable
 BEFORE UPDATE ON replay_steps
 FOR EACH ROW
 EXECUTE FUNCTION prevent_replay_step_mutation();
+
+CREATE OR REPLACE FUNCTION prevent_audit_event_mutation()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_events are immutable and append-only (id=%)',
+        COALESCE(OLD.id, NEW.id);
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_audit_events_immutable_update ON audit_events;
+CREATE TRIGGER trg_audit_events_immutable_update
+BEFORE UPDATE ON audit_events
+FOR EACH ROW
+EXECUTE FUNCTION prevent_audit_event_mutation();
+
+DROP TRIGGER IF EXISTS trg_audit_events_immutable_delete ON audit_events;
+CREATE TRIGGER trg_audit_events_immutable_delete
+BEFORE DELETE ON audit_events
+FOR EACH ROW
+EXECUTE FUNCTION prevent_audit_event_mutation();
 """
 
 
