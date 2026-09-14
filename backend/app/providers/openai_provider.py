@@ -26,6 +26,7 @@ from app.domain.exceptions import (
 )
 from app.llm.models import EvidenceReference, ExplanationRequest, ExplanationResponse
 from app.llm.prompts import EXPLANATION_SYSTEM_PROMPT
+from app.observability import start_span
 
 PROVIDER_NAME = "openai"
 
@@ -74,6 +75,17 @@ class OpenAIProvider:
         self._max_retries = max_retries
 
     async def explain(self, request: ExplanationRequest) -> ExplanationResponse:
+        """Phase 15 spec §21 provider-boundary span. Never carries the
+        API key, prompt, or response — only provider/model/outcome."""
+
+        with start_span(
+            "agentabi.openai.explain",
+            kind="client",
+            attributes={"agentabi.provider": PROVIDER_NAME, "agentabi.model": self._model},
+        ):
+            return await self._explain_impl(request)
+
+    async def _explain_impl(self, request: ExplanationRequest) -> ExplanationResponse:
         if not self._api_key:
             raise LLMProviderNotConfigured(PROVIDER_NAME)
 

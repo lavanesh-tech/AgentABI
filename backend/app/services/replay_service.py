@@ -32,6 +32,7 @@ from app.domain.exceptions import (
 from app.models.project import Project
 from app.models.replay_run import ReplayRun
 from app.models.replay_step import ReplayStep
+from app.observability import start_span
 from app.replay.executor import ExecutorRegistry
 from app.replay.models import ReplayPlan, ReplayStatus, StepKind, StepStatus, TrajectoryEventView
 from app.replay.planner import build_replay_plan
@@ -210,6 +211,18 @@ class ReplayService:
         return Page(items=items, total=total, page=page, page_size=page_size)
 
     async def execute_replay(self, project_id: uuid.UUID, replay_id: uuid.UUID) -> ReplayRun:
+        """Phase 15 spec §14 domain span boundary."""
+
+        with start_span(
+            "agentabi.replay.execute",
+            attributes={
+                "agentabi.project_id": str(project_id),
+                "agentabi.replay_id": str(replay_id),
+            },
+        ):
+            return await self._execute_replay_impl(project_id, replay_id)
+
+    async def _execute_replay_impl(self, project_id: uuid.UUID, replay_id: uuid.UUID) -> ReplayRun:
         replay_run = await self.get_replay(project_id, replay_id)
 
         if not is_valid_transition(replay_run.status, ReplayStatus.RUNNING):

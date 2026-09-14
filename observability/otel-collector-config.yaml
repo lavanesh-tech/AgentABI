@@ -1,0 +1,27 @@
+# Minimal local OpenTelemetry Collector topology (Phase 15 spec §26/§27).
+# No credentials, no cloud exporters — receives OTLP from the API/worker
+# and logs spans to stdout for local development. Point a real backend
+# (Jaeger, Tempo, a vendor OTLP endpoint) at this collector later by
+# adding an exporter here; AgentABI itself never changes.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

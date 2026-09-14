@@ -44,6 +44,12 @@ def get_engine(settings: Settings | None = None) -> AsyncEngine:
             max_overflow=10,
             echo=settings.debug and settings.is_local,
         )
+        # Phase 15 spec §16: no-op unless OTEL_ENABLED=true and the SDK
+        # is installed; never captures bind parameter values (default
+        # SQLAlchemyInstrumentor behavior — not overridden here).
+        from app.observability import instrument_sqlalchemy
+
+        instrument_sqlalchemy(_engine, settings)
     return _engine
 
 

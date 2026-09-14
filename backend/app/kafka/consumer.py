@@ -20,6 +20,7 @@ from app.events.errors import (
     UnsupportedEventVersion,
 )
 from app.events.handler import EventHandler
+from app.observability import extract_trace_context, set_current_span_attributes, start_span
 
 logger = structlog.get_logger(__name__)
 
@@ -72,30 +73,55 @@ class KafkaEventConsumer:
             await self._process_one(message)
 
     async def _process_one(self, message) -> None:  # noqa: ANN001 - aiokafka ConsumerRecord
-        try:
-            envelope = deserialize_envelope(message.value)
-        except MalformedEventPayload:
-            # Poison message (spec §22): logged with safe metadata only,
-            # routed to DLQ if configured, and the loop continues — never
-            # a raw exception body or the message bytes themselves.
-            logger.warning(
-                "kafka_poison_message",
-                topic=message.topic,
-                partition=message.partition,
-                offset=message.offset,
-            )
-            await self._to_dlq(message, "malformed_payload", retry_count=0)
-            await self._consumer.commit()
-            return
+        # spec §10/§13: extract W3C context from Kafka headers before
+        # starting this message's span, so it's a child of the
+        # producer's span rather than the start of a new trace.
+        parent_context = extract_trace_context(getattr(message, "headers", None))
+        with start_span(
+            "agentabi.kafka.consume",
+            kind="consumer",
+            parent_context=parent_context,
+            attributes={
+                "messaging.system": "kafka",
+                "messaging.destination": message.topic,
+                "messaging.kafka.partition": message.partition,
+                "messaging.kafka.offset": message.offset,
+            },
+        ):
+            try:
+                envelope = deserialize_envelope(message.value)
+            except MalformedEventPayload:
+                # Poison message (spec §22): logged with safe metadata only,
+                # routed to DLQ if configured, and the loop continues — never
+                # a raw exception body or the message bytes themselves.
+                logger.warning(
+                    "kafka_poison_message",
+                    topic=message.topic,
+                    partition=message.partition,
+                    offset=message.offset,
+                )
+                await self._to_dlq(message, "malformed_payload", retry_count=0)
+                await self._consumer.commit()
+                return
 
-        await self._dispatch_with_retry(message, envelope)
+            await self._dispatch_with_retry(message, envelope)
 
     async def _dispatch_with_retry(self, message, envelope: EventEnvelope) -> None:  # noqa: ANN001
+        set_current_span_attributes(
+            {
+                "agentabi.event_id": envelope.event_id,
+                "agentabi.event_type": envelope.event_type,
+                "agentabi.correlation_id": envelope.correlation_id,
+            }
+        )
         attempt = 0
         while True:
             try:
                 await self._handler.handle(envelope)
                 await self._consumer.commit()
+                set_current_span_attributes(
+                    {"agentabi.retry_count": attempt, "agentabi.outcome": "processed"}
+                )
                 logger.info(
                     "kafka_event_processed",
                     event_id=envelope.event_id,
@@ -151,6 +177,13 @@ class KafkaEventConsumer:
                 # risk.
 
     async def _to_dlq(self, message, failure_category: str, *, retry_count: int) -> None:  # noqa: ANN001
+        set_current_span_attributes(
+            {
+                "agentabi.retry_count": retry_count,
+                "agentabi.outcome": "dlq",
+                "agentabi.dlq_reason": failure_category,
+            }
+        )
         if self._dlq_publish is None:
             return
         try:

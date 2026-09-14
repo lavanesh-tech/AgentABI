@@ -27,6 +27,7 @@ from app.domain.exceptions import (
     MalformedGitHubIdentity,
 )
 from app.github.oauth_models import GitHubIdentity, GitHubTokenResponse
+from app.observability import start_span
 
 # `GitHubOAuthClient` (the Protocol) lives in `oauth_models.py`, not
 # here — see that module's docstring on why.
@@ -61,31 +62,40 @@ class HttpxGitHubOAuthClient:
         return f"{AUTHORIZE_URL}?{query}"
 
     async def exchange_code(self, *, code: str, redirect_uri: str) -> GitHubTokenResponse:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(
-                    TOKEN_URL,
-                    headers={"Accept": "application/json"},
-                    data={
-                        "client_id": self.client_id,
-                        "client_secret": self.client_secret,
-                        "code": code,
-                        "redirect_uri": redirect_uri,
-                    },
-                )
-                response.raise_for_status()
-                body = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            # Never surface the upstream body/status to the caller — it
-            # can echo back request parameters. See spec §14.
-            raise GitHubTokenExchangeFailed() from exc
+        # Never a code/token/secret attribute on this span — spec
+        # §20/§33: only the operation itself is observable.
+        with start_span("github.oauth.exchange", kind="client"):
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.post(
+                        TOKEN_URL,
+                        headers={"Accept": "application/json"},
+                        data={
+                            "client_id": self.client_id,
+                            "client_secret": self.client_secret,
+                            "code": code,
+                            "redirect_uri": redirect_uri,
+                        },
+                    )
+                    response.raise_for_status()
+                    body = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                # Never surface the upstream body/status to the caller — it
+                # can echo back request parameters. See spec §14.
+                raise GitHubTokenExchangeFailed() from exc
 
-        access_token = body.get("access_token")
-        token_type = body.get("token_type")
-        scope = body.get("scope", "")
-        if not isinstance(access_token, str) or not access_token or not isinstance(token_type, str):
-            raise GitHubTokenExchangeFailed()
-        return GitHubTokenResponse(access_token=access_token, scope=scope, token_type=token_type)
+            access_token = body.get("access_token")
+            token_type = body.get("token_type")
+            scope = body.get("scope", "")
+            if (
+                not isinstance(access_token, str)
+                or not access_token
+                or not isinstance(token_type, str)
+            ):
+                raise GitHubTokenExchangeFailed()
+            return GitHubTokenResponse(
+                access_token=access_token, scope=scope, token_type=token_type
+            )
 
     async def fetch_identity(self, *, access_token: str) -> GitHubIdentity:
         headers = {

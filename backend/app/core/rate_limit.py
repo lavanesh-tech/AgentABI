@@ -84,10 +84,15 @@ class RedisRateLimiter:
         self._redis = redis_client
 
     async def check(self, key: str, *, limit: int, window_seconds: int) -> RateLimitResult:
-        try:
-            current = await self._redis.eval(_FIXED_WINDOW_SCRIPT, 1, key, window_seconds)
-        except Exception as exc:  # redis.RedisError, connection errors, ...
-            raise RateLimiterUnavailable() from exc
+        from app.observability import start_span
+
+        # spec §18: no rate-limit identifier (the `key`, which encodes
+        # client identity) attached — only the fact that a check ran.
+        with start_span("redis.rate_limit.check", kind="client"):
+            try:
+                current = await self._redis.eval(_FIXED_WINDOW_SCRIPT, 1, key, window_seconds)
+            except Exception as exc:  # redis.RedisError, connection errors, ...
+                raise RateLimiterUnavailable() from exc
         current = int(current)
         allowed = current <= limit
         return RateLimitResult(

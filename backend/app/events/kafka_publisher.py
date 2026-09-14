@@ -14,6 +14,7 @@ from aiokafka.errors import KafkaError
 from app.events.envelope import EventEnvelope, serialize_envelope
 from app.events.errors import TransientEventProcessingError
 from app.events.publisher import resolve_topic
+from app.observability import inject_trace_headers, start_span
 
 
 class KafkaEventPublisher:
@@ -53,13 +54,28 @@ class KafkaEventPublisher:
         )
         key = event.metadata.get("partition_key", event.event_id).encode("utf-8")
         value = serialize_envelope(event)
-        try:
-            await self._producer.send_and_wait(topic, value=value, key=key)
-        except KafkaError as exc:
-            # A publish failure is always transient from the caller's
-            # perspective (spec §20/§29) — never fabricated as success,
-            # never silently swallowed.
-            raise TransientEventProcessingError(f"Kafka publish failed: {exc}") from exc
+        # spec §10 (mandatory): W3C trace context travels in Kafka
+        # message headers, never inside the event payload — the
+        # envelope/schema is byte-for-byte unchanged by tracing.
+        headers = inject_trace_headers()
+        with start_span(
+            "agentabi.kafka.publish",
+            kind="producer",
+            attributes={
+                "messaging.system": "kafka",
+                "messaging.destination": topic,
+                "agentabi.event_id": event.event_id,
+                "agentabi.event_type": event.event_type,
+                "agentabi.correlation_id": event.correlation_id,
+            },
+        ):
+            try:
+                await self._producer.send_and_wait(topic, value=value, key=key, headers=headers)
+            except KafkaError as exc:
+                # A publish failure is always transient from the caller's
+                # perspective (spec §20/§29) — never fabricated as success,
+                # never silently swallowed.
+                raise TransientEventProcessingError(f"Kafka publish failed: {exc}") from exc
 
 
 __all__ = ["KafkaEventPublisher"]

@@ -22,6 +22,7 @@ from app.models.differential_change import DifferentialChangeRecord
 from app.models.differential_report import DifferentialReportRecord
 from app.models.replay_run import ReplayRun
 from app.models.replay_step import ReplayStep
+from app.observability import start_span
 from app.replay.models import ReplayStatus
 from app.repositories.differential_repository import DifferentialRepository
 from app.repositories.replay_repository import ReplayRepository
@@ -42,6 +43,31 @@ class DifferentialService:
         self._replays = ReplayRepository(session)
 
     async def run_analysis(
+        self,
+        project_id: uuid.UUID,
+        *,
+        baseline_replay_id: uuid.UUID,
+        candidate_replay_id: uuid.UUID,
+        compatibility_scan_id: uuid.UUID | None = None,
+    ) -> DifferentialReportRecord:
+        """Phase 15 spec §14 domain span boundary."""
+
+        with start_span(
+            "agentabi.differential.analyze",
+            attributes={
+                "agentabi.project_id": str(project_id),
+                "agentabi.baseline_replay_id": str(baseline_replay_id),
+                "agentabi.candidate_replay_id": str(candidate_replay_id),
+            },
+        ):
+            return await self._run_analysis_impl(
+                project_id,
+                baseline_replay_id=baseline_replay_id,
+                candidate_replay_id=candidate_replay_id,
+                compatibility_scan_id=compatibility_scan_id,
+            )
+
+    async def _run_analysis_impl(
         self,
         project_id: uuid.UUID,
         *,

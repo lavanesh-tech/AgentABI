@@ -67,6 +67,18 @@ services:
       timeout: 10s
       retries: 10
 
+  # Phase 15: local trace sink. Disabled by default from the API/worker's
+  # side (OTEL_ENABLED=false) — this service only matters once that's
+  # turned on. No credentials, no cloud exporter (spec §27).
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+
   api:
     build:
       context: ./backend
@@ -78,6 +90,8 @@ services:
       REDIS_DSN: redis://redis:6379/0
       NEO4J_URI: bolt://neo4j:7687
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OTEL_SERVICE_NAME: agentabi-api
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
     ports:
       - "8000:8000"
     depends_on:
