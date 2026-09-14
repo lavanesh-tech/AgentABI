@@ -15,6 +15,8 @@ _MEMBER_READ_ONLY = {
     Permission.GRAPH_READ,
     # Phase 10 spec §22: MEMBER may read differential reports.
     Permission.DIFFERENTIAL_READ,
+    # Phase 11 spec §25: MEMBER may read risk assessments.
+    Permission.RISK_READ,
 }
 
 _ENGINEERING_WRITES = {
@@ -29,6 +31,8 @@ _ENGINEERING_WRITES = {
     Permission.AUDIT_READ,
     # Phase 10 spec §22: ADMIN may execute differential analysis.
     Permission.DIFFERENTIAL_EXECUTE,
+    # Phase 11 spec §25: ADMIN may execute risk assessments.
+    Permission.RISK_EXECUTE,
 }
 
 _GOVERNANCE = {Permission.MEMBERSHIP_MANAGE, Permission.ORG_MANAGE}

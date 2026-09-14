@@ -2,6 +2,45 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-057 — Per-category score caps as the double-counting policy; hard-block rules always carry `score_delta = 0` (2026-09-14)
+
+Spec §16 requires "a clear policy" against over-penalizing the same
+underlying evidence. Chosen approach: group the 8 score rules into 5
+categories (`compatibility`/`replay`/`differential`/`blast_radius`/
+`latency`), sum each category's raw triggered deltas, then clamp each
+category's *sum* to a fixed cap (40/45/50/20/15) before adding to the
+overall score (also capped at 100). This was preferred over evidence-
+key deduplication (harder to define a stable "same evidence" key across
+rules with genuinely different predicates) and over a single global
+rule-count cap (would suppress legitimately independent categories,
+e.g. a moderate compatibility break plus a large blast radius). The two
+hard-block rules (`HARD_BLOCK_CRITICAL_COMPAT_BREAK`, `HARD_BLOCK_NEW_
+REPLAY_FAILURE`) always report `score_delta = 0` — they influence
+`decision` directly, never the numeric score, so `hard_block=true`
+never silently inflates `score` past what the ungated rules alone
+produced. This is also why `HARD_BLOCK_NEW_REPLAY_FAILURE` deliberately
+overlaps in predicate with the score rule `NEW_REPLAY_FAILURE`
+(`new_failures > 0`): the duplication is intentional, not a bug — the
+score stays a meaningful signal even if a human overrides the hard
+block, while the decision itself can never be "averaged away" by
+unrelated low-scoring evidence.
+
+## ADR-056 — Decision bands adopted as specified (PASS<30/WARN 30-69/BLOCK≥70); blast radius is `Optional[int]`, never coerced to 0 (2026-09-14)
+
+The spec's own recommended thresholds were adopted as-is (spec §6) —
+no data-driven reason surfaced during this phase to deviate, and a
+versioned, documented default is more valuable than an unjustified
+tweak. `RiskContext.blast_radius_total_affected` is `int | None`, not
+`int` defaulting to 0: `RiskService._compute_blast_radius` returns
+`None` whenever `BlastRadiusService.compute()` raises
+`GraphUnavailable` or `GraphComponentNotFound` (Neo4j unreachable, or
+the compatibility scan's component was never synced into the graph),
+and `HIGH_BLAST_RADIUS` (`app/risk/rules.py`) treats `None` as "no
+signal" — it does not fire. Coercing an unavailable graph to `0` would
+read as "checked, nothing affected," which is a fabricated finding; the
+engine would rather under-score (never fabricate) than over-claim
+certainty about blast radius it couldn't actually compute.
+
 ## ADR-055 — Idempotency key: `(project_id, baseline_replay_id, candidate_replay_id, analyzer_version)`, not a client-supplied key (2026-09-14)
 
 Unlike Phase 6/7's `external_run_id`/`idempotency_key` (client-supplied,

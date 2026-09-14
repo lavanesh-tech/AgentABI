@@ -42,6 +42,8 @@ class Permission(enum.StrEnum):
     AUDIT_READ = "audit:read"
     DIFFERENTIAL_READ = "differential:read"
     DIFFERENTIAL_EXECUTE = "differential:execute"
+    RISK_READ = "risk:read"
+    RISK_EXECUTE = "risk:execute"
 
 
 # MEMBER: least-privilege, read-only across every organization-scoped
@@ -58,6 +60,9 @@ _MEMBER_PERMISSIONS: frozenset[Permission] = frozenset(
         # bucket as every other read-only resource — reading derived
         # evidence isn't a privileged action, only computing it is.
         Permission.DIFFERENTIAL_READ,
+        # Phase 11 spec §25: MEMBER may read risk assessments, same
+        # read-only bucket as every other derived-evidence resource.
+        Permission.RISK_READ,
     }
 )
 
@@ -79,6 +84,10 @@ _ADMIN_PERMISSIONS: frozenset[Permission] = _MEMBER_PERMISSIONS | frozenset(
         # REPLAY_EXECUTE) — MEMBER never triggers analysis, only reads
         # results.
         Permission.DIFFERENTIAL_EXECUTE,
+        # Phase 11 spec §25: running a risk assessment is a privileged
+        # engineering action, same bucket as DIFFERENTIAL_EXECUTE —
+        # MEMBER never triggers one, only reads results.
+        Permission.RISK_EXECUTE,
         # Security Phase E spec §17: ADMIN may read the organization's
         # audit trail (a privileged engineering/security action, same
         # bucket as SCAN_EXECUTE/REPLAY_EXECUTE) — only membership

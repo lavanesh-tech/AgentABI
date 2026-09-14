@@ -1,12 +1,24 @@
 """Structural proof that the deterministic core does not depend on
-OpenAI (spec §31). Pure — no network, no API key, no `openai` import
-required for this file itself to run.
+OpenAI (Phase 8 spec §31; reinforced by Phase 10 and Phase 11's own
+deterministic packages). Pure — no network, no API key, no `openai`
+import required for this file itself to run.
 """
 
 import ast
 from pathlib import Path
 
-DETERMINISTIC_PACKAGES = ("compatibility", "graph", "replay", "trajectory", "domain")
+DETERMINISTIC_PACKAGES = (
+    "compatibility",
+    "graph",
+    "replay",
+    "trajectory",
+    "domain",
+    "differential",
+    # Phase 11 spec §29: the deterministic Risk Engine must never import
+    # OpenAI or any LLM-provider module — it only ever consumes already-
+    # computed deterministic evidence.
+    "risk",
+)
 FORBIDDEN_IMPORT_ROOTS = ("openai",)
 
 

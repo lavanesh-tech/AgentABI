@@ -1436,3 +1436,121 @@ pre-existing async/FastAPI-dependent ones every phase already
 documents. `tests/test_differential_service.py` (real-Postgres
 integration, spec §29) is written and `py_compile`-clean but needs
 SQLAlchemy, not installed here — not executed.
+
+## Phase 11: Deterministic Risk Engine
+
+Answers "given all deterministic evidence, should this change PASS,
+WARN, or BLOCK?" — never with an LLM. `app/risk/` (models, rules,
+engine) is pure stdlib `dataclasses`/`enum.StrEnum`, has no SQLAlchemy/
+FastAPI/OpenAI import, and is proven so by AST inspection: "risk" was
+added to `tests/test_llm_architectural_invariant.py`'s
+`DETERMINISTIC_PACKAGES` tuple (alongside a new "differential" entry,
+reinforcing Phase 10's own boundary) rather than duplicating a second
+structural-test file. The engine works with `OPENAI_API_KEY=` unset —
+it never reads it, never calls out, and never receives OpenAI output as
+an input.
+
+**RiskContext** (`app/risk/models.py`) is the only input `app.risk.
+engine.evaluate()` ever sees: a typed, frozen dataclass of already-
+computed deterministic evidence (compatibility scan summary/severity
+counts, differential summary/step-difference flags, best-effort blast-
+radius total). `app/services/risk_service.py` is the only place one is
+constructed, from `CompatibilityScan`/`DifferentialReportRecord` ORM
+rows and `BlastRadiusService.compute()` — never from `app.llm` output.
+
+**Rules** (`app/risk/rules.py`) — 8 named score rules plus 2 hard-block
+rules, each a pure `RiskContext -> TriggeredRule | None` function,
+centrally discoverable via the `SCORE_RULES`/`HARD_BLOCK_RULES` tuples:
+
+| rule_id | category | delta | trigger |
+|---|---|---|---|
+| `COMPAT_BREAKING_CHANGE` | compatibility | 30 | scan status `breaking` or any breaking change |
+| `NEW_REPLAY_FAILURE` | replay | `min(15×new_failures, 45)` | differential `new_failures > 0` |
+| `REMOVED_REQUIRED_STEP` | differential | 20 | `STEP_REMOVED` on a baseline step that wasn't already failed/skipped |
+| `HIGH_BLAST_RADIUS` | blast_radius | 10 (3-9 affected) / 20 (≥10 affected) | `BlastRadiusResult.total_affected` |
+| `OUTPUT_SCHEMA_BREAK` | differential | 20 | differential `schema_changes > 0` |
+| `TOOL_INVOCATION_CHANGED` | differential | 10 | any `TOOL_CHANGED`/`PROVIDER_INVOCATION_CHANGED` |
+| `ERROR_INTRODUCED` | differential | 15 | any `ERROR_INTRODUCED` |
+| `SIGNIFICANT_LATENCY_INCREASE` | latency | 10 | max measured `latency_percent_delta ≥ 50%` |
+
+`resolved_failures`/step-added evidence has deliberately no rule keyed
+on it — spec §11's "failure resolved must NOT increase risk" holds
+because there is nothing to increase it, not a special-cased subtraction.
+
+**Double-counting policy** (spec §16): each category (`compatibility`,
+`replay`, `differential`, `blast_radius`, `latency`) has a fixed cap —
+40/45/50/20/15 — applied to that category's *summed raw deltas* before
+adding to the overall score, which is then capped at 100. Several
+DIFFERENTIAL-category rules firing on the same underlying differential
+report (e.g. `OUTPUT_SCHEMA_BREAK` + `TOOL_INVOCATION_CHANGED` +
+`ERROR_INTRODUCED` + `REMOVED_REQUIRED_STEP`) is legitimate — it's real,
+distinct evidence — but their combined contribution is capped rather
+than left to sum unbounded.
+
+**Score and decision**: `score` is 0-100; `RISK_ENGINE_VERSION = "1"`.
+Banding: **PASS < 30, WARN 30-69, BLOCK ≥ 70** (the spec's recommended
+thresholds, adopted as-is). **Hard-block rules** (`HARD_BLOCK_CRITICAL_
+COMPAT_BREAK` on any CRITICAL-severity compatibility change,
+`HARD_BLOCK_NEW_REPLAY_FAILURE` on any new replay failure) force
+`decision = BLOCK` independent of the numeric score — a hard-blocked
+assessment still reports the score the rules alone would have produced
+(never inflated by the hard-block rule itself, which always carries
+`score_delta = 0`) so a reviewer can see how close the deterministic
+signals were on their own. A `RiskContext()` with no evidence at all
+triggers nothing: `score=0, decision=PASS, hard_block=False` — there is
+no special-cased "no evidence" branch, it falls out of every rule's
+predicate not matching.
+
+**Reasons/provenance** (spec §19-§20): every triggered rule carries
+`rule_id`, `category`, a human-readable `description`, its raw
+`score_delta`, and `evidence_refs` — stable string pointers (e.g.
+`"compatibility_scan:<id>"`, `"differential.summary.new_failures"`)
+into real evidence the engine was given, never invented identifiers.
+
+**Persistence**: `RiskAssessmentRecord`/`RiskRuleResultRecord`
+(migration 0009) — same immutable-evidence pattern as `differential_
+reports`/`differential_changes` (UPDATE-blocking trigger), idempotent
+per `(project_id, compatibility_scan_id, differential_report_id,
+risk_engine_version)` unique constraint, and a canonical SHA-256
+`content_hash` over the assessment's deterministic content (reusing
+`app.domain.checksums`) supporting the reproducibility test.
+
+**Blast radius** is best-effort: `RiskService._compute_blast_radius`
+catches `GraphUnavailable`/`GraphComponentNotFound` and returns `None`
+("not computed" — no signal) rather than coercing to `0` ("computed,
+nothing affected"), which would be a fabricated finding.
+
+**API**: `POST/GET /api/v1/projects/{project_id}/risk/assessments`,
+`GET .../assessments/{assessment_id}` — `RISK_EXECUTE` (ADMIN/OWNER,
+reuses the `scan_replay` rate-limit bucket, same cost class as
+`DIFFERENTIAL_EXECUTE`) and `RISK_READ` (any membership) added
+centrally to `app/authz/permissions.py`; `tests/
+test_authz_permissions.py`'s hardcoded expected sets were updated in
+the *same* change (learned from Phase 10's regression) rather than
+discovered afterward.
+
+**Phase 12 contract**: `decision` (`PASS`/`WARN`/`BLOCK`), `score`,
+`hard_block`, and `rule_results[]` are exactly the fields a GitHub
+check-run status needs — Phase 11 makes no GitHub API call itself.
+
+**Phase 8 integration**: `app/llm/` is unchanged this phase — no new
+field was added to `ExplanationRequest`. OpenAI may explain an
+already-computed `RiskAssessment` only on an explicit, separate call;
+`RiskService` never invokes `app.llm`/`ExplanationService` itself.
+
+**Verification**: pure logic ran for real via `pytest --noconftest` —
+`tests/test_risk_rules.py` (rule-level, incl. no-evidence, threshold
+bands, hard-block, evidence-ref presence) and `tests/test_risk_engine.
+py` (exact decision-boundary values 29/30/69/70/100 via `_decide`
+directly, reproducibility, score-cap-at-100, double-counting-cap,
+deterministic rule ordering, resolved-failures-don't-increase-score) —
+**26/26 passed**. Full regression sweep: **313 passed**, no new
+failures beyond the pre-existing async/FastAPI-dependent ones every
+phase already documents (confirmed `tests/test_authz_permissions.py`
+still 12/12 green after the new permissions). `tests/
+test_risk_service.py` (real-Postgres integration, spec §37) is written
+and `py_compile`-clean but needs SQLAlchemy, not installed here — not
+executed; no dedicated `test_risk_api.py` was added, following Phase
+10's own precedent of relying on service-level tests plus the
+centralized-permission unit tests where FastAPI/httpx aren't
+executable in this sandbox.

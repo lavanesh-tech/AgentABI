@@ -474,7 +474,44 @@ to complete verification before starting Phase 10.
 
 ## Phase 10 — Differential Analyzer: COMPLETE
 
-## Phase 11 — Deterministic Risk Engine: NEXT
+## Phase 11 — Deterministic Risk Engine: COMPLETE
+
+## Phase 12 — GitHub PR / Release Integration: NEXT
+
+Adds `app/risk/` (models, rules, engine — all dependency-free/pure),
+`app/models/risk_{assessment,rule_result}.py`, migration 0009,
+`app/repositories/risk_repository.py`, `app/services/risk_service.py`,
+`app/api/v1/risk.py` (`POST/GET .../risk/assessments`, `GET
+.../assessments/{id}`), and two new centralized permissions
+(`RISK_READ`/`RISK_EXECUTE`). Deterministically composes compatibility,
+differential, replay, and blast-radius evidence into a PASS/WARN/BLOCK
+decision with a 0-100 score — never an LLM. See docs/ARCHITECTURE.md's
+Phase 11 section and docs/DECISIONS.md ADR-056/057.
+
+Same sandbox restriction as every prior phase: `pytest-asyncio` and
+SQLAlchemy aren't installable here. Pure logic ran for real via `pytest
+--noconftest`: every named rule, decision-threshold boundaries (exact
+29/30/69/70/100), reproducibility, hard-block, score-cap, double-
+counting-cap, deterministic ordering, and the AST-based no-LLM-
+dependency test (extended `DETERMINISTIC_PACKAGES` to include `risk`
+and `differential`) — **26/26 passed**. Adding `RISK_READ`/
+`RISK_EXECUTE` required updating `tests/test_authz_permissions.py`'s
+hardcoded expected sets in the *same* change this time (Phase 10's
+regression lesson applied proactively) — still 12/12 green. Full sweep
+across every pure-runnable test in `tests/`: **313 passed**, no new
+failures beyond the pre-existing async/FastAPI-dependent gaps every
+phase already documents. `ruff format --check`/`ruff check` clean;
+`python3.12 -m py_compile` clean across `app`/`tests`/`alembic`; `mypy`
+unavailable (`No module named mypy`), same as every phase.
+`tests/test_risk_service.py` (real-Postgres integration) is
+written/`py_compile`-clean, not pytest-executed (needs SQLAlchemy); no
+dedicated `test_risk_api.py`, following Phase 10's own precedent.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Phase 12.
+
+## Phase 10 — Differential Analyzer: COMPLETE (detail)
 
 Adds `app/differential/` (models, alignment, value_diff, analyzer — all
 dependency-free/pure), `app/models/differential_{report,change}.py`,
