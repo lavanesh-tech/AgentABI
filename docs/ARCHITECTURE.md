@@ -1665,3 +1665,153 @@ FastAPI/httpx aren't executable in this sandbox. `ruff format --check`/
 every phase. No real GitHub credentials exist in this environment, so no
 live GitHub Checks API smoke test was performed — honestly skipped, not
 fabricated.
+
+## Phase 13: Kafka Event Pipeline
+
+**Purpose**: decouple event ingestion (the GitHub webhook request) from
+analysis execution (the deterministic pipeline) without moving any
+business logic into Kafka producers/consumers. Kafka is transport/
+orchestration infrastructure only — `app/risk/`, `app/compatibility/`,
+`app/differential/` are all completely untouched this phase.
+
+**Flow**: `github_webhook` route -> `GitHubPullRequestAnalysisService.
+start_analysis` (validates the mapping, persists a PENDING `GitHubPull
+RequestAnalysis` row — cheap enough for the request thread) -> `app/
+events/analysis_events.build_analysis_requested_event` -> `EventPublisher.
+publish` -> topic `agentabi.analysis.requests` -> `app.kafka.worker`'s
+`KafkaEventConsumer` -> `AnalysisRequestHandler` -> `GitHubPullRequest
+AnalysisService.run_analysis` (the actual Phase 5 compatibility -> Phase
+11 risk -> GitHub check-publish pipeline, unchanged from Phase 12) ->
+optionally `github.pr.analysis.completed`/`.failed` on
+`agentabi.analysis.results`.
+
+**Event envelope** (`app/events/envelope.py`, pure — no SQLAlchemy/
+FastAPI/aiokafka import): `event_id` (UUID4), `event_type`,
+`event_version` (int, explicit per type in `SUPPORTED_EVENT_VERSIONS`),
+`occurred_at` (ISO 8601), `correlation_id`, `project_id`/
+`organization_id`, a typed `payload` dict, and `metadata` (transport-
+only — the partition key lives here, never in `payload`). Serialization
+is deterministic stdlib `json` with `sort_keys=True` (ADR-068, not the
+already-declared-but-uninstallable-here `orjson`). `validate_event_
+version` rejects any version other than the one currently registered
+for that `event_type` — never a silent reinterpretation (spec §6).
+
+**Event taxonomy** (`app/events/analysis_events.py`): exactly three
+types — `github.pr.analysis.requested`, `.completed`, `.failed` — each
+with a typed payload dataclass built from plain scalars extracted from
+ORM rows, never an ORM object itself. Completed/failed payloads carry
+only identifiers (`risk_assessment_id`, `decision`, `score`; or a safe
+`error_category` + `retry_count`) — never the raw rule-results/
+compatibility-diff evidence or an exception message/stack trace (spec
+§27/§28/§45).
+
+**Topics and partitioning**: two topics by direction (`agentabi.
+analysis.requests`/`agentabi.analysis.results`) plus one DLQ topic
+(`agentabi.analysis.dlq`) — see ADR-067. Partition key is
+`f"{github_repository_id}:{pull_request_number}"` (ADR-066) — a
+convenience for same-PR ordering, never the actual correctness
+mechanism (see exact-SHA below).
+
+**Producer/consumer abstraction**: `app/events/publisher.EventPublisher`
+(Protocol, `async def publish(self, event) -> None`) and `app/events/
+handler.EventHandler` (Protocol, `async def handle(self, event) -> None`)
+— application/service code depends on these, never on `aiokafka`
+directly (spec §8/§9). `KafkaEventPublisher`/`KafkaEventConsumer` (`app/
+events/kafka_publisher.py`, `app/kafka/consumer.py`) are the production
+implementations; `InMemoryEventPublisher` (`app/events/fake_publisher.
+py`) is the test double, in the production tree since more than one test
+module needs it (mirrors `app.github.checks_fake.FakeGitHubChecksClient`).
+
+**KAFKA_ENABLED optionality**: `Settings.kafka_enabled` defaults to
+`false` everywhere (ADR-063). `false` — `github_webhook`'s dispatch step
+calls `GitHubPullRequestAnalysisService.analyze_pull_request` exactly as
+Phase 12 always did (internally, `start_analysis` immediately followed
+by `run_analysis` — ADR-064, no duplicated pipeline implementation).
+`true` — the route calls `start_analysis`, publishes the request event,
+and returns; the worker performs `run_analysis` later. `aiokafka` is
+imported lazily (function-scope, not module-scope) in `app/events/
+factory.py` and `app/core/readiness.py`, so a process that never enables
+Kafka never needs it importable at all — app startup/shutdown and
+`/ready` all stay fully functional with Kafka disabled.
+
+**Exact-SHA invariant carries over from Phase 12, strengthened
+structurally**: `run_analysis` takes an `expected_head_sha` and compares
+it against the persisted, immutable `GitHubPullRequestAnalysis.head_sha`
+before doing any work, raising `GitHubAnalysisHeadShaMismatch` on a
+mismatch (spec §16/§38). Since a row's `head_sha` is never reassigned,
+and every check-publish call is keyed off `analysis.head_sha` (never a
+"latest" value), this makes the stale-result protection hold regardless
+of Kafka delivery order — see ADR-066's note that partition-key ordering
+is a convenience, not the safety mechanism.
+
+**Idempotency under at-least-once delivery** (ADR-065): no new dedup
+table — `run_analysis` branches on the persisted `status`: COMPLETED is
+a no-op on redelivery, FAILED is not auto-retried (spec §20), and
+PUBLISH_FAILED retries the check publish only, reusing the existing
+`risk_assessment_id`/`compatibility_scan_id` rather than recomputing
+(spec §28's "never recompute risk solely because publishing failed").
+
+**Consumer offset/retry/DLQ policy** (`app/kafka/consumer.py`):
+`enable_auto_commit=False` — commit only after the handler completes
+successfully (spec §19). One message at a time, no unlimited concurrent
+tasks (spec §26). `TransientEventProcessingError` (e.g. `GitHubAPI
+Unavailable`) is retried up to 3 times in-process before routing to the
+DLQ topic; `PermanentEventProcessingError` (malformed payload,
+unsupported version, a permanent domain error) is never retried — routed
+to DLQ immediately (spec §20/§21/§22). A poison message (invalid JSON,
+missing required fields) is caught at `deserialize_envelope`, logged
+with safe metadata only, sent to DLQ, and the loop continues — it can
+never crash the consumer.
+
+**Security** (spec §29/§30/§43): structured log fields are limited to
+event id/type/topic/partition/offset/correlation id/project id/retry
+count/duration — never a token, webhook secret, or the full payload.
+`tests/test_events_analysis_events.py::test_no_secret_fields_in_any_
+event_schema` asserts none of the three event payloads can ever contain
+a token/secret/authorization/api_key/password/jwt substring.
+
+**Worker entrypoint**: `python -m app.kafka.worker` (also `make
+worker`) — opens one short-lived Postgres session per consumed message
+(mirrors `get_db_session`'s per-request lifecycle), never a long-lived
+shared session across events (spec §46's crash-and-redeliver recovery
+property).
+
+**Readiness**: `/ready`'s new `kafka` check (`app/core/readiness.
+check_kafka_connection`) returns `True` immediately when `KAFKA_ENABLED=
+false` (spec §31 — "not applicable," never "failing"); when enabled, it
+starts the producer (idempotent) and reports success/failure.
+
+**Local Docker Compose**: unchanged — the existing Phase 1 `kafka`
+service (KRaft mode) is reused as-is; topics rely on Kafka's default
+auto-create behavior (ADR-067), no explicit topic-init step added this
+phase.
+
+**Verification**: pure logic ran for real via `pytest --noconftest` —
+`tests/test_events_envelope.py` (UUID/version/ISO-timestamp assignment,
+deterministic serialization, round-trip, malformed/missing-field
+rejection, version validation) and `tests/test_events_analysis_events.
+py` (partition-key stability, all three event builders' payload shape,
+the no-secrets assertion, request-payload round-trip/parsing) —
+**28/28 passed**. Full regression sweep: **369 passed** (up from Phase
+12's 341), no new failures beyond the pre-existing async/FastAPI-
+dependent gaps every phase already documents (the new `tests/
+test_events_fake_publisher.py` adds 5 more async-only failures to that
+same documented category — `pytest-asyncio` still unavailable).
+`ruff format --check`/`ruff check` clean; `python3.12 -m py_compile`
+clean across `app`/`tests`/`alembic`; `mypy` unavailable, same as every
+phase. `tests/test_events_fake_publisher.py`, `tests/test_kafka_
+analysis_handler.py` (real-Postgres integration, incl. duplicate-event
+idempotency), and `tests/test_github_pr_analysis_service.py`'s new
+Phase 13 tests (`start_analysis`/`run_analysis` split, head_sha-mismatch
+rejection, redelivery idempotency, PUBLISH_FAILED retry-without-
+recompute) are written/`py_compile`-clean, not pytest-executed (need
+`pytest-asyncio`/SQLAlchemy). `app/kafka/consumer.py` and `app/events/
+kafka_publisher.py` (both `aiokafka`-dependent) are written/`py_compile`-
+clean only — no dedicated consumer unit test was added given the
+sandbox can't import `aiokafka` at all, so a test constructing one would
+assert nothing beyond what code review already covers; its retry/DLQ/
+poison-message logic is documented above and exercised indirectly
+through `AnalysisRequestHandler`'s tests, which cover the actual
+domain-error classification the consumer dispatches on. No live Kafka
+broker exists in this environment — the optional real-Kafka smoke test
+(spec §41) was honestly skipped, never fabricated.

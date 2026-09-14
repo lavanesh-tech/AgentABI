@@ -1,13 +1,17 @@
 """`GitHubPullRequestAnalysisService` integration tests (real Postgres via
-the `session` fixture, spec §37-§38). Written and `py_compile`-clean;
-needs SQLAlchemy/asyncpg, unavailable in this sandbox — see
-docs/DECISIONS.md. Includes the mandatory stale-SHA protection test
-(spec §25/§37).
+the `session` fixture, Phase 12 spec §37-§38, Phase 13 spec §16/§17/§28/
+§37/§38). Written and `py_compile`-clean; needs SQLAlchemy/asyncpg,
+unavailable in this sandbox — see docs/DECISIONS.md. Includes the
+mandatory stale-SHA protection tests (Phase 12 spec §25/§37, Phase 13's
+`run_analysis` head_sha-mismatch equivalent, spec §16/§38) and the
+`start_analysis`/`run_analysis` split the Kafka path uses.
 """
 
 import pytest
 
 from app.domain.exceptions import (
+    GitHubAnalysisHeadShaMismatch,
+    GitHubAPIUnavailable,
     GitHubRepositoryNotMapped,
     MissingAgentABIConfiguration,
 )
@@ -255,3 +259,142 @@ async def test_cross_org_repository_mapping_is_not_reachable(session):
 
     assert analysis.project_id == project.id
     assert analysis.project_id != other_project.id
+
+
+# --- Phase 13: start_analysis/run_analysis split (Kafka path) --------------
+
+
+async def test_start_analysis_creates_pending_row_without_running_pipeline(session):
+    org, project, component, mapping = await _setup(session)
+    checks = FakeGitHubChecksClient()
+    service = GitHubPullRequestAnalysisService(session, checks_client=checks)
+
+    analysis = await service.start_analysis(
+        _payload(head_sha="cand-sha"), delivery_id="d1", request_id=None
+    )
+
+    assert analysis.status == GitHubPRAnalysisStatus.PENDING.value
+    assert analysis.risk_assessment_id is None
+    assert checks.calls == []  # no check published yet — no pipeline ran
+
+
+async def test_run_analysis_after_start_analysis_completes_the_pipeline(session):
+    org, project, component, mapping = await _setup(session)
+    candidate = ComponentVersion(
+        component_id=component.id, version="cand-sha", content={}, checksum="b" * 64
+    )
+    session.add(candidate)
+    await session.flush()
+    await session.commit()
+
+    checks = FakeGitHubChecksClient()
+    service = GitHubPullRequestAnalysisService(session, checks_client=checks)
+    started = await service.start_analysis(
+        _payload(head_sha="cand-sha"), delivery_id="d1", request_id=None
+    )
+
+    finished = await service.run_analysis(
+        project_id=started.project_id, analysis_id=started.id, expected_head_sha="cand-sha"
+    )
+
+    assert finished.id == started.id
+    assert finished.status == GitHubPRAnalysisStatus.COMPLETED.value
+    assert finished.risk_assessment_id is not None
+    assert any(c.status.value == "completed" for c in checks.calls)
+
+
+async def test_run_analysis_head_sha_mismatch_is_rejected(session):
+    """Spec §16/§38: a caller asking to process a `github_pr_analysis_id`
+    for a head_sha other than the one it is pinned to must be refused,
+    never silently processed against the wrong commit."""
+
+    org, project, component, mapping = await _setup(session)
+    checks = FakeGitHubChecksClient()
+    service = GitHubPullRequestAnalysisService(session, checks_client=checks)
+    started = await service.start_analysis(
+        _payload(head_sha="sha-a"), delivery_id="d1", request_id=None
+    )
+
+    with pytest.raises(GitHubAnalysisHeadShaMismatch):
+        await service.run_analysis(
+            project_id=started.project_id, analysis_id=started.id, expected_head_sha="sha-b"
+        )
+
+
+async def test_run_analysis_is_idempotent_on_redelivery(session):
+    """Spec §17/§37: Kafka's at-least-once delivery means the same
+    analysis-request event can be consumed twice — the second call must
+    be a no-op, never a second pipeline run or a second check publish."""
+
+    org, project, component, mapping = await _setup(session)
+    candidate = ComponentVersion(
+        component_id=component.id, version="cand-sha", content={}, checksum="b" * 64
+    )
+    session.add(candidate)
+    await session.flush()
+    await session.commit()
+
+    checks = FakeGitHubChecksClient()
+    service = GitHubPullRequestAnalysisService(session, checks_client=checks)
+    started = await service.start_analysis(
+        _payload(head_sha="cand-sha"), delivery_id="d1", request_id=None
+    )
+    first = await service.run_analysis(
+        project_id=started.project_id, analysis_id=started.id, expected_head_sha="cand-sha"
+    )
+    call_count_after_first = len(checks.calls)
+
+    second = await service.run_analysis(
+        project_id=started.project_id, analysis_id=started.id, expected_head_sha="cand-sha"
+    )
+
+    assert second.id == first.id
+    assert second.status == GitHubPRAnalysisStatus.COMPLETED.value
+    assert len(checks.calls) == call_count_after_first  # no republish on redelivery
+
+
+async def test_publish_failed_retry_republishes_without_recomputing_risk(session):
+    """Spec §28: a `PUBLISH_FAILED` analysis retried via a fresh
+    `run_analysis` call must republish the *existing* risk assessment,
+    never recompute it."""
+
+    org, project, component, mapping = await _setup(session)
+    candidate = ComponentVersion(
+        component_id=component.id, version="cand-sha", content={}, checksum="b" * 64
+    )
+    session.add(candidate)
+    await session.flush()
+    await session.commit()
+
+    # First run: in-progress publish succeeds, completed publish fails.
+    checks = FakeGitHubChecksClient()
+    started = await GitHubPullRequestAnalysisService(session, checks_client=checks).start_analysis(
+        _payload(head_sha="cand-sha"), delivery_id="d1", request_id=None
+    )
+
+    class _FailOnSecondCall(FakeGitHubChecksClient):
+        async def create_check_run(self, request):
+            result = await super().create_check_run(request)
+            if len(self.calls) == 1:
+                return result
+            raise GitHubAPIUnavailable("simulated")
+
+    checks = _FailOnSecondCall()
+    service = GitHubPullRequestAnalysisService(session, checks_client=checks)
+    failed = await service.run_analysis(
+        project_id=started.project_id, analysis_id=started.id, expected_head_sha="cand-sha"
+    )
+    assert failed.status == GitHubPRAnalysisStatus.PUBLISH_FAILED.value
+    first_risk_assessment_id = failed.risk_assessment_id
+    assert first_risk_assessment_id is not None
+
+    # Retry: publish-only, same risk assessment, no recompute.
+    retry_checks = FakeGitHubChecksClient()
+    retry_service = GitHubPullRequestAnalysisService(session, checks_client=retry_checks)
+    retried = await retry_service.run_analysis(
+        project_id=started.project_id, analysis_id=started.id, expected_head_sha="cand-sha"
+    )
+
+    assert retried.status == GitHubPRAnalysisStatus.COMPLETED.value
+    assert retried.risk_assessment_id == first_risk_assessment_id
+    assert any(c.status.value == "completed" for c in retry_checks.calls)

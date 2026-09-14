@@ -764,3 +764,21 @@ class GitHubCheckPublishFailed(AgentABIError):
     validation error, an unknown ref, a malformed response) — never
     retried, never treated as "transiently unavailable" (spec §27/§29).
     Mapped to HTTP 502."""
+
+
+class GitHubAnalysisHeadShaMismatch(AgentABIError):
+    """Raised if a `github_pr_analysis_id` is ever asked to process a
+    `head_sha` other than the one it was created for (Phase 13 spec
+    §16/§38's mandatory stale-SHA test). `GitHubPullRequestAnalysis.
+    head_sha` is immutable once created, so this should be structurally
+    unreachable — this exception exists as the explicit, tested
+    assertion of that invariant, not as an expected runtime path."""
+
+    def __init__(self, analysis_id: Any, expected_head_sha: str, actual_head_sha: str) -> None:
+        super().__init__(
+            f"analysis {analysis_id} is pinned to head_sha={actual_head_sha!r}, "
+            f"not {expected_head_sha!r} — refusing to process"
+        )
+        self.analysis_id = analysis_id
+        self.expected_head_sha = expected_head_sha
+        self.actual_head_sha = actual_head_sha

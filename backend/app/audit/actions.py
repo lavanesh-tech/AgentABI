@@ -26,3 +26,7 @@ class AuditAction(enum.StrEnum):
     GITHUB_PR_ANALYSIS_COMPLETED = "github_pr_analysis_completed"
     GITHUB_CHECK_PUBLISHED = "github_check_published"
     GITHUB_CHECK_FAILED = "github_check_failed"
+    KAFKA_ANALYSIS_ENQUEUED = "kafka_analysis_enqueued"
+    KAFKA_ANALYSIS_STARTED = "kafka_analysis_started"
+    KAFKA_ANALYSIS_COMPLETED = "kafka_analysis_completed"
+    KAFKA_ANALYSIS_FAILED = "kafka_analysis_failed"

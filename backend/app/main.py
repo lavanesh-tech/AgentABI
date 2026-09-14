@@ -33,6 +33,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await dispose_engine()
     await dispose_driver()
     await dispose_redis_client()
+    if settings.kafka_enabled:
+        # Lazy import: a process that never enables Kafka should never
+        # need `aiokafka` importable to start up or shut down cleanly
+        # (spec §12).
+        from app.events.factory import dispose_event_publisher
+
+        await dispose_event_publisher()
     logger.info("shutdown")
 
 

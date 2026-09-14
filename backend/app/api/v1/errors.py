@@ -28,6 +28,7 @@ from app.domain.exceptions import (
     AuthenticationRequired,
     ConflictError,
     ExpiredToken,
+    GitHubAnalysisHeadShaMismatch,
     GitHubAPIUnavailable,
     GitHubAuthenticationFailed,
     GitHubAuthorizationDenied,
@@ -132,6 +133,7 @@ _DOMAIN_ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
     GitHubAPIUnavailable: (status.HTTP_502_BAD_GATEWAY, UPSTREAM_ERROR),
     GitHubAuthenticationFailed: (status.HTTP_502_BAD_GATEWAY, UPSTREAM_ERROR),
     GitHubCheckPublishFailed: (status.HTTP_502_BAD_GATEWAY, UPSTREAM_ERROR),
+    GitHubAnalysisHeadShaMismatch: (status.HTTP_409_CONFLICT, CONFLICT),
     AgentABIError: (status.HTTP_400_BAD_REQUEST, INVALID_REQUEST),
 }
 

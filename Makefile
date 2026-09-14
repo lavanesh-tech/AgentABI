@@ -1,4 +1,4 @@
-.PHONY: venv install fmt lint typecheck test run migrate migrate-down revision infra-up infra-down infra-logs
+.PHONY: venv install fmt lint typecheck test run worker migrate migrate-down revision infra-up infra-down infra-logs
 
 VENV := backend/.venv
 PY := $(VENV)/bin/python
@@ -26,6 +26,9 @@ test:
 
 run:
 	cd backend && ../$(VENV)/bin/uvicorn app.main:app --reload
+
+worker:
+	cd backend && ../$(VENV)/bin/python -m app.kafka.worker
 
 migrate:
 	cd backend && ../$(VENV)/bin/alembic upgrade head

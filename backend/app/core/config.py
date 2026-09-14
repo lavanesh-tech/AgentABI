@@ -84,8 +84,22 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = "agentabi_dev_password"
 
-    # --- Kafka --------------------------------------------------------------
+    # --- Kafka (Phase 13) ---------------------------------------------------
+    # `kafka_enabled=False` (the default, and every local/unit-test default)
+    # keeps the deterministic core fully usable without Kafka: Phase 12's PR
+    # analysis runs inline on the webhook request exactly as it did before
+    # this phase (spec §12). Flipping it on switches the webhook route to
+    # enqueue an analysis-request event for `app.kafka.worker` instead.
     kafka_bootstrap_servers: str = "localhost:9092"
+    kafka_client_id: str = "agentabi"
+    # Stable, configurable group (spec §18) — never generated per-process —
+    # so multiple worker processes horizontally scale by sharing partitions
+    # of the same topics rather than each seeing every message.
+    kafka_consumer_group: str = "agentabi-analysis-workers"
+    kafka_analysis_request_topic: str = "agentabi.analysis.requests"
+    kafka_analysis_result_topic: str = "agentabi.analysis.results"
+    kafka_analysis_dlq_topic: str = "agentabi.analysis.dlq"
+    kafka_enabled: bool = False
 
     # --- AI providers (never hardcode; empty means "not configured") ------
     # OpenAI-only for now (Phase 8) — Gemini stays defined but unused
