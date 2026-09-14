@@ -2,6 +2,62 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-038 — Role is a JWT-absent, per-request database lookup, not an embedded claim (2026-09-14)
+
+**Context:** Security Phase A's spec explicitly asks: "Document whether
+role is embedded in JWT or reloaded from the database on requests.
+Prefer security/correctness over convenience."
+
+**Decision:** `JWTClaims` (`app/auth/claims.py`) carries no role/scope
+claim at all — only `sub`, `iss`, `aud`, `iat`, `exp`, and an optional
+`org_id` naming the organization the token was issued for.
+`get_current_user` (`app/api/deps/auth.py`) always re-queries
+`OrganizationMember` for `(user_id, org_id)` on every request to
+determine the current role.
+
+**Why:** an embedded role claim goes stale the instant a user is
+promoted/demoted/removed after token issuance — a still-valid JWT would
+keep granting the old permission until it expires (up to
+`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`). Reloading per request costs one
+indexed lookup and closes that window entirely: a permission change
+takes effect on the very next request. No refresh-token/revocation
+infrastructure is needed to compensate, since there's nothing
+permission-bearing to revoke inside the token itself.
+
+## ADR-037 — Stdlib-only HS256 JWT implementation; existing OrganizationRole kept as-is (2026-09-14)
+
+**Context:** Two judgment calls this phase, both driven by the same
+constraint (this sandbox cannot install packages — PyPI returns 403,
+same as every prior phase's ADR-005/006/008/...): (1) no JWT library
+(PyJWT/authlib) is installable; (2) the phase's request named
+`ADMIN`/`ENGINEER`/`VIEWER` as required roles, but Phase 2 already
+shipped `OrganizationRole` as `OWNER`/`ADMIN`/`MEMBER`.
+
+**Decision (JWT):** `app/auth/jwt.py` implements RFC 7519/7515 HS256
+JWS compact serialization directly from `hmac`/`hashlib`/`base64`/
+`json` — no external dependency. This isn't just a workaround: it
+mirrors the codebase's existing pure-module pattern
+(`app/compatibility/`, `app/trajectory/`, `app/replay/`), keeping
+authentication's core logic dependency-free and genuinely
+`pytest`-executable in this environment. The implementation fixes the
+algorithm to HS256 everywhere (never reads `alg` from the token to
+decide how to verify), closing the "alg: none"/algorithm-confusion
+attack class by construction, and uses `hmac.compare_digest` for
+constant-time signature comparison. Once dependencies are installable,
+swapping to PyJWT/authlib behind this same `encode_token`/`decode_token`
+interface is a contained, optional follow-up — not required for
+correctness today.
+
+**Decision (roles):** kept `OrganizationRole.OWNER`/`ADMIN`/`MEMBER`
+as-is rather than renaming to `ADMIN`/`ENGINEER`/`VIEWER`. The enum is
+already migrated (`0001_initial_schema.py`) and used by existing rows;
+renaming its values now would be a breaking schema change for no
+functional gain — every actual Phase A requirement (role scoped to an
+organization membership, not a global field on `User`; a user in
+multiple organizations) was already satisfied. This is "reuse, don't
+duplicate" applied literally: the spec's own instruction to preserve
+Phase 2 models when they already implement the requirement.
+
 ## ADR-036 — Phase 7 verification: pure planner/executor logic ran for real; persistence was verified by direct DDL (2026-09-14)
 
 **Context:** Same sandbox restriction as every prior phase — SQLAlchemy/

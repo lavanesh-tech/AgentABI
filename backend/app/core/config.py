@@ -58,6 +58,19 @@ class Settings(BaseSettings):
     github_app_id: str | None = None
     github_private_key: str | None = None
 
+    # --- JWT authentication (Security Phase A) -------------------------------
+    # No real secret ships here or in .env.example — only a local-dev
+    # default so `local`/`test` work without setup. Production must set
+    # JWT_SECRET via the environment (later, AWS Secrets Manager); nothing
+    # in this codebase ever logs it (see `app/core/logging.py`'s field
+    # allowlist — `jwt_secret` is deliberately not one of the bound
+    # context fields anywhere).
+    jwt_secret: str = "local-dev-only-insecure-secret-change-me"
+    jwt_algorithm: Literal["HS256"] = "HS256"
+    jwt_issuer: str = "agentabi"
+    jwt_audience: str = "agentabi-api"
+    jwt_access_token_expire_minutes: int = 60
+
     @property
     def is_local(self) -> bool:
         return self.environment == "local"

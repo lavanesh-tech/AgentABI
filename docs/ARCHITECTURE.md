@@ -841,3 +841,87 @@ a replay run and its steps. `test_replay_service.py` (10 tests) and
 could not be executed through `pytest` itself this session (need
 SQLAlchemy/FastAPI/httpx, unavailable — same restriction as every prior
 phase).
+
+## Security Phase A: Authentication Foundation
+
+```
+backend/
+  app/
+    auth/
+      claims.py        # JWTClaims dataclass — sub/iss/aud/iat/exp/org_id;
+                        # no role claim (see "Role is reloaded, not embedded")
+      jwt.py             # encode_token()/decode_token() — stdlib-only HS256
+      principal.py         # AuthenticatedPrincipal — the typed context routes use
+    api/deps/
+      auth.py           # get_current_user / require_authenticated_user
+    api/v1/
+      auth.py           # GET /auth/me
+      errors.py           # + AuthenticationError handler (401, WWW-Authenticate)
+    repositories/
+      user_repository.py               # get_by_id
+      organization_member_repository.py # get_for_user_and_organization
+    domain/exceptions.py # + AuthenticationError and its 5 subclasses
+  tests/
+    test_auth_jwt.py       # pure unit tests (incl. alg-confusion/tamper cases)
+    test_auth_principal.py   # unit tests (needs SQLAlchemy for OrganizationRole)
+    test_auth_api.py           # real-Postgres + HTTP integration tests
+```
+
+No new models and no migration: Phase 2's `User` (`is_active` already
+present), `Organization`, and `OrganizationMember`/`OrganizationRole`
+(`owner`/`admin`/`member`) already model everything Phase A needs —
+reused as-is rather than duplicated. See ADR-037/038.
+
+### Authentication vs. authorization
+
+Phase A answers "who is this request from" — a verified JWT resolving to
+a real, active `User`. It deliberately does *not* answer "is this user
+allowed to do X": no role/project permission checks exist yet.
+`AuthenticatedPrincipal.role` is populated when the token names an
+organization the user belongs to, but nothing in Phase A reads it to
+gate anything — that enforcement is Security Phase C.
+
+### Role is reloaded from the database, never trusted from the JWT
+
+`JWTClaims` carries no role claim. `get_current_user` always re-queries
+`OrganizationMember` for the token's `org_id` on every request, so a
+demotion/removal made after a token was issued takes effect on the very
+next request rather than only after the token expires. See ADR-038.
+
+### Why a stdlib-only JWT implementation
+
+PyJWT/authlib cannot be installed in this sandbox (same PyPI-403
+restriction as every prior phase's dependencies). `app/auth/jwt.py`
+implements HS256 JWS compact serialization directly from `hmac`/
+`hashlib`/`base64`/`json` — one fixed algorithm (never read from the
+token, closing "alg: none"/algorithm-confusion attacks outright) and one
+constant-time comparison (`hmac.compare_digest`). This mirrors the
+existing pure-module pattern (`app/compatibility/`, `app/trajectory/`,
+`app/replay/`): dependency-free, genuinely `pytest`-executable in this
+environment. See ADR-037 for the tradeoff and future path.
+
+### Why organization roles stayed OWNER/ADMIN/MEMBER
+
+The request that started this phase named `ADMIN`/`ENGINEER`/`VIEWER` as
+the required roles, but Phase 2 already shipped and migrated
+`OrganizationRole` as `OWNER`/`ADMIN`/`MEMBER`. Renaming a migrated enum
+column's values is a breaking schema change with no functional
+justification here — every Phase A requirement (an organization-scoped
+role, not a single global role on `User`, multi-organization membership)
+is already satisfied by the existing enum. Kept as-is; see ADR-037.
+
+### Verification in this session
+
+`app/auth/jwt.py`/`claims.py` are stdlib-only, so they ran through the
+real installed `pytest` binary via `pytest --noconftest`: **12/12 new
+pure unit tests passed**, including tampered-signature, wrong-issuer,
+wrong-audience, missing-claim, and alg-confusion cases; combined with
+Phase 5/6/7's 149, **161/161 passed**, confirming no regression. `ruff
+format --check`/`ruff check` clean; `python3.12 -m py_compile` clean;
+`mypy` fails on the same pre-existing `pydantic.mypy` error as every
+prior phase. `test_auth_principal.py` and `test_auth_api.py` (9 tests:
+missing/valid/expired/malformed/unknown-user/disabled-user/out-of-org
+tokens, and a response-shape assertion that only the four public fields
+ever serialize) are written and `py_compile`-clean but need SQLAlchemy/
+FastAPI/httpx, unavailable this session. No migration was needed or
+created — `users.is_active` already exists from migration 0001.
