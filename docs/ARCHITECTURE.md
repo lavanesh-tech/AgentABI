@@ -1815,3 +1815,76 @@ through `AnalysisRequestHandler`'s tests, which cover the actual
 domain-error classification the consumer dispatches on. No live Kafka
 broker exists in this environment — the optional real-Kafka smoke test
 (spec §41) was honestly skipped, never fabricated.
+
+## Phase 14: Frontend Dashboard
+
+**Purpose**: a production-quality recruiter/demo frontend answering
+"what changed, what depends on it, what behavior changed, what is the
+deployment risk, and why" — never a generic admin CRUD UI, never a
+chatbot. Built entirely against the backend surface inventoried at the
+start of this phase (spec §1); the one confirmed gap (PR-analysis
+history had no read endpoint) was closed with the minimum necessary
+addition — see ADR-069 — rather than any broader backend redesign.
+
+**Stack**: Next.js 14 (App Router), React 18, TypeScript (strict, no
+`any`), Tailwind CSS, TanStack Query, React Flow (dependency graph),
+Recharts (declared, lightly used — most "visualization" here is
+structured tables/badges over deterministic evidence, deliberately not
+chart-heavy, per spec §5's information-density guidance over decoration).
+
+**Structure** (`frontend/`, independently runnable, never mixed into
+the FastAPI package):
+- `app/` — routes. `(protected)/` is a route group wrapping every
+  authenticated screen in `ProtectedShell` (sidebar + header + redirect-
+  to-`/login` when unauthenticated); `login/` and `auth/callback/` are
+  the only public routes.
+- `lib/api-client.ts` — the single fetch boundary. Reads
+  `NEXT_PUBLIC_AGENTABI_API_URL`, attaches the bearer token from
+  `lib/auth-storage.ts`, parses the standardized `{error: {code,
+  message, request_id, fields?}}` envelope into a typed `ApiError`,
+  and fires a registered 401 handler (wired by `AuthProvider`) that
+  clears the session — no route component touches `fetch` directly.
+- `features/*/hooks.ts` — one TanStack Query hook module per
+  implemented backend resource (projects, components, compatibility,
+  graph, trajectories, replays, differential, risk, github, audit),
+  each mutation invalidating exactly the query keys it affects.
+- `lib/permissions.ts` — a frontend mirror of `app/authz/
+  permissions.py`'s MEMBER/ADMIN/OWNER -> permission map. UX only
+  (hides/disables controls); the backend remains the sole
+  authorization authority, exactly as spec §29 requires.
+- `types/api.ts` — hand-written types matching the inventoried Pydantic
+  response schemas field-for-field; nothing invented.
+- `components/diff/StructuredDiffTable.tsx` — the one reusable
+  Change Type / Path / Before / After / Severity / Evidence view (spec
+  §15), shared by the Compatibility and Differential screens; raw JSON
+  is an expandable secondary view, never the primary display.
+- `components/risk/*` — `RiskDecisionBadge`, `RiskScoreBar` (renders
+  the configured PASS 0-29 / WARN 30-69 / BLOCK 70-100 thresholds and
+  flags when a hard-block rule forced the decision independent of
+  score), `RiskRuleList` (per-rule id/description/score-delta/
+  evidence-refs/hard-block).
+- `components/graph/DependencyGraph.tsx` — React Flow rendering of real
+  `GET .../graph/dependents` + `GET .../graph/blast-radius` data;
+  changed/direct/transitive/unaffected tiers come entirely from the
+  blast-radius response, never computed in the browser.
+
+**Auth flow** (see ADR-070 for the full rationale): GitHub OAuth stays
+entirely backend-owned (`GET /auth/github/login`,
+`GET /auth/github/callback`) with zero code changes; only
+`github_oauth_redirect_uri` is configured to point at this app's own
+`/auth/callback` route instead of the backend's. That route forwards
+GitHub's `code`/`state` to the backend callback via an unauthenticated
+client fetch, stores the returned JWT in `sessionStorage`, and redirects
+into the app. Logout is client-side token clearing only — the backend
+has no logout route (stateless JWT).
+
+**Verification**: same sandbox network restriction as every backend
+phase now also blocks `npm install` (`403 Forbidden` from the npm
+registry) — `npm run lint`/`typecheck`/`test`/`build` and Playwright
+could not be executed. All frontend source is written, type-annotated
+by hand against the inventoried backend contract, and reviewed, but
+not machine-verified beyond that. `docker compose config` validates the
+added `web` service cleanly; `docker build ./frontend` could not run
+(daemon not running in this sandbox). See docs/ROADMAP.md's Phase 14
+detail section for the exact commands to run locally to complete
+verification.

@@ -34,6 +34,8 @@ recomputing risk (spec §28's "never recompute risk solely because
 publishing failed").
 """
 
+import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -98,6 +100,14 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class PRAnalysisPage:
+    items: list[GitHubPullRequestAnalysis]
+    total: int
+    page: int
+    page_size: int
+
+
 class GitHubPullRequestAnalysisService:
     def __init__(self, session: AsyncSession, *, checks_client: GitHubChecksClient) -> None:
         self._session = session
@@ -148,6 +158,34 @@ class GitHubPullRequestAnalysisService:
         analysis, _created = await self._start_or_get(
             payload, delivery_id=delivery_id, request_id=request_id
         )
+        return analysis
+
+    async def list_analyses(
+        self,
+        project_id: uuid.UUID,
+        *,
+        pull_request_number: int | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> PRAnalysisPage:
+        """Phase 14 read path (spec §25/§26) — the frontend's only source
+        for PR-analysis history; no read path existed before this."""
+
+        offset = (page - 1) * page_size
+        items, total = await self._analyses.list_by_project(
+            project_id,
+            pull_request_number=pull_request_number,
+            offset=offset,
+            limit=page_size,
+        )
+        return PRAnalysisPage(items=items, total=total, page=page, page_size=page_size)
+
+    async def get_analysis(
+        self, project_id: uuid.UUID, analysis_id: uuid.UUID
+    ) -> GitHubPullRequestAnalysis:
+        analysis = await self._analyses.get_by_id(project_id, analysis_id)
+        if analysis is None:
+            raise GitHubPullRequestAnalysisNotFound(analysis_id)
         return analysis
 
     async def get_repository_mapping(

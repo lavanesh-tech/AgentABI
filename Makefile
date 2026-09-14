@@ -1,4 +1,4 @@
-.PHONY: venv install fmt lint typecheck test run worker migrate migrate-down revision infra-up infra-down infra-logs
+.PHONY: venv install fmt lint typecheck test run worker migrate migrate-down revision infra-up infra-down infra-logs frontend
 
 VENV := backend/.venv
 PY := $(VENV)/bin/python
@@ -47,3 +47,6 @@ infra-down:
 
 infra-logs:
 	docker compose logs -f
+
+frontend:
+	cd frontend && npm install && npm run dev

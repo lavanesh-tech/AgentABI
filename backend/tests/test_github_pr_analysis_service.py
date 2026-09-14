@@ -7,6 +7,8 @@ mandatory stale-SHA protection tests (Phase 12 spec §25/§37, Phase 13's
 `start_analysis`/`run_analysis` split the Kafka path uses.
 """
 
+import uuid
+
 import pytest
 
 from app.domain.exceptions import (
@@ -398,3 +400,47 @@ async def test_publish_failed_retry_republishes_without_recomputing_risk(session
     assert retried.status == GitHubPRAnalysisStatus.COMPLETED.value
     assert retried.risk_assessment_id == first_risk_assessment_id
     assert any(c.status.value == "completed" for c in retry_checks.calls)
+
+
+async def test_list_analyses_orders_newest_first_and_paginates(session):
+    """Phase 14 spec §25/§26 read path: exact-SHA history, newest first,
+    never merging rows for different head_shas."""
+    org, project, component, mapping = await _setup(session)
+    checks = FakeGitHubChecksClient()
+    service = GitHubPullRequestAnalysisService(session, checks_client=checks)
+
+    for sha in ("sha-one", "sha-two", "sha-three"):
+        candidate = ComponentVersion(
+            component_id=component.id, version=sha, content={}, checksum="c" * 64
+        )
+        session.add(candidate)
+        await session.flush()
+        await session.commit()
+        started = await service.start_analysis(
+            _payload(head_sha=sha), delivery_id=f"d-{sha}", request_id=None
+        )
+        await service.run_analysis(
+            project_id=started.project_id, analysis_id=started.id, expected_head_sha=sha
+        )
+
+    page = await service.list_analyses(project.id, page=1, page_size=2)
+    assert page.total == 3
+    assert page.page_size == 2
+    assert [a.head_sha for a in page.items] == ["sha-three", "sha-two"]
+
+    second_page = await service.list_analyses(project.id, page=2, page_size=2)
+    assert [a.head_sha for a in second_page.items] == ["sha-one"]
+
+    filtered = await service.list_analyses(
+        project.id, pull_request_number=_payload(head_sha="sha-one").pull_request_number
+    )
+    assert filtered.total == 3  # same PR number for all three in this test
+
+
+async def test_get_analysis_not_found_raises(session):
+    from app.domain.exceptions import GitHubPullRequestAnalysisNotFound
+
+    org, project, component, mapping = await _setup(session)
+    service = GitHubPullRequestAnalysisService(session, checks_client=FakeGitHubChecksClient())
+    with pytest.raises(GitHubPullRequestAnalysisNotFound):
+        await service.get_analysis(project.id, uuid.uuid4())

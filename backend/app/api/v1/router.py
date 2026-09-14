@@ -9,6 +9,7 @@ from app.api.v1.compatibility import router as compatibility_router
 from app.api.v1.components import router as components_router
 from app.api.v1.differential import router as differential_router
 from app.api.v1.errors import COMMON_ERROR_RESPONSES
+from app.api.v1.github_pr_analyses import router as github_pr_analyses_router
 from app.api.v1.github_repositories import router as github_repositories_router
 from app.api.v1.github_webhook import router as github_webhook_router
 from app.api.v1.graph import router as graph_router
@@ -35,5 +36,6 @@ api_router.include_router(replays_router, responses=COMMON_ERROR_RESPONSES)
 api_router.include_router(differential_router, responses=COMMON_ERROR_RESPONSES)
 api_router.include_router(risk_router, responses=COMMON_ERROR_RESPONSES)
 api_router.include_router(github_repositories_router, responses=COMMON_ERROR_RESPONSES)
+api_router.include_router(github_pr_analyses_router, responses=COMMON_ERROR_RESPONSES)
 api_router.include_router(github_webhook_router, responses=COMMON_ERROR_RESPONSES)
 api_router.include_router(audit_events_router, responses=COMMON_ERROR_RESPONSES)

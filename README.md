@@ -30,6 +30,19 @@ make test          # pytest
 `GET /api/v1/health` reports process liveness. `GET /api/v1/ready` reports
 whether Postgres is actually reachable (503 if not).
 
+## Frontend
+
+```bash
+cp frontend/.env.example frontend/.env.local
+make frontend        # npm install && npm run dev, or cd frontend && npm run dev
+```
+
+Standalone Next.js app in `frontend/`, independently runnable from the
+backend — see docs/ARCHITECTURE.md's Phase 14 section for structure,
+auth flow, and the API-client/TanStack Query boundary. GitHub OAuth
+requires setting the backend's `github_oauth_redirect_uri` to the
+frontend's own `/auth/callback` route (see docs/DECISIONS.md ADR-070).
+
 ## Security & API
 
 Access to non-public APIs requires an AgentABI JWT obtained via GitHub
