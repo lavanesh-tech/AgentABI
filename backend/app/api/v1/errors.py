@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from app.domain.exceptions import (
     AgentABIError,
+    AuthenticationError,
     ConflictError,
     GraphUnavailable,
     InvalidCompatibilityComparison,
@@ -40,6 +41,20 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ConflictError)
     async def handle_conflict(request: Request, exc: ConflictError) -> JSONResponse:
         return _error_response(409, str(exc))
+
+    @app.exception_handler(AuthenticationError)
+    async def handle_authentication_error(
+        request: Request, exc: AuthenticationError
+    ) -> JSONResponse:
+        # One handler for every authentication failure mode
+        # (AuthenticationRequired/InvalidToken/ExpiredToken/UnknownUser/
+        # DisabledUser) — see docs/DECISIONS.md on why these don't get
+        # distinguishable HTTP responses. A WWW-Authenticate header is
+        # the standard signal that a bearer-token challenge is expected
+        # (RFC 6750).
+        response = _error_response(401, str(exc))
+        response.headers["WWW-Authenticate"] = "Bearer"
+        return response
 
     @app.exception_handler(InvalidComponentContent)
     async def handle_invalid_content(

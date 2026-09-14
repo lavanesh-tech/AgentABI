@@ -317,3 +317,58 @@ class ReplayExecutionFailed(AgentABIError):
         super().__init__(f"Replay {replay_id} execution failed: {detail}")
         self.replay_id = replay_id
         self.detail = detail
+
+
+class AuthenticationError(AgentABIError):
+    """Base class for "the request's credentials could not be
+    established" errors. Mapped to HTTP 401 — distinct from
+    `NotFoundError`/`ConflictError`: authentication failures never leak
+    whether a resource exists, only that the caller isn't recognized."""
+
+
+class AuthenticationRequired(AuthenticationError):
+    """Raised when a protected endpoint receives no Bearer token at
+    all."""
+
+    def __init__(self) -> None:
+        super().__init__("Authentication required")
+
+
+class InvalidToken(AuthenticationError):
+    """Raised for any structurally/cryptographically invalid token:
+    malformed, wrong signature, wrong issuer/audience, missing required
+    claims. Deliberately one error for all of these (Phase A spec §10) —
+    telling a caller *which* validation failed would help an attacker
+    probe the verifier; the client-facing message is uniform."""
+
+    def __init__(self, detail: str = "Invalid authentication token") -> None:
+        super().__init__(detail)
+
+
+class ExpiredToken(AuthenticationError):
+    """Raised when a token's `exp` claim has passed. Kept distinct from
+    `InvalidToken` only because "your session expired, log in again" is
+    a meaningfully different client action than "this token is
+    garbage" — the HTTP mapping is identical (401)."""
+
+    def __init__(self) -> None:
+        super().__init__("Authentication token has expired")
+
+
+class UnknownUser(AuthenticationError):
+    """Raised when a token's `sub` claim decodes and verifies
+    successfully but no longer resolves to an existing user (e.g. the
+    account was deleted after the token was issued). A valid signature
+    is not, by itself, proof of a live identity."""
+
+    def __init__(self) -> None:
+        super().__init__("Authentication token does not reference a known user")
+
+
+class DisabledUser(AuthenticationError):
+    """Raised when a token resolves to a real user whose `is_active` is
+    false. A valid signature and a real account are still not enough —
+    the account must currently be allowed to authenticate."""
+
+    def __init__(self) -> None:
+        super().__init__("User account is disabled")

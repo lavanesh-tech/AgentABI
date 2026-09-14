@@ -26,6 +26,15 @@ every phase.
 | 19 | CI/CD | ⬜ Not started |
 | 20 | Benchmarks + README + diagrams + demo prep | ⬜ Not started |
 
+Security work (layered onto the phases above, tracked separately):
+
+| # | Security Phase | Status |
+|---|-----------------|--------|
+| A | Authentication foundation (JWT) | ✅ Done (see caveat in DECISIONS.md ADR-037) |
+| B | GitHub OAuth2 | ⬜ Not started |
+| C | RBAC / project authorization | ⬜ Not started |
+| D-F | (rate limiting, webhook security, audit, docs — as scoped when reached) | ⬜ Not started |
+
 ## Phase 1 notes
 
 Repository structure, FastAPI skeleton, settings, structured logging,
@@ -245,3 +254,41 @@ DECISIONS.md ADR-036.
 Run `make install && make lint && make typecheck && make test &&
 alembic upgrade head` locally to complete verification before starting
 Phase 8.
+
+## Security Phase A notes
+
+Authentication foundation: a stdlib-only HS256 JWT implementation
+(`app/auth/jwt.py`, `app/auth/claims.py` — no PyJWT/authlib, same
+install restriction as every phase's deps), a typed `AuthenticatedPrincipal`
+(`app/auth/principal.py`) built by `get_current_user`
+(`app/api/deps/auth.py`) which decodes the bearer token, reloads the
+user, checks `is_active`, and — if the token carries an `org_id` —
+reloads the caller's role from `OrganizationMember` on every request
+rather than trusting a role claim (ADR-038). `GET /api/v1/auth/me`
+(`app/api/v1/auth.py`) is the one protected endpoint, returning an
+explicit `AuthMeResponse` that cannot serialize secrets. Reused Phase
+2's existing `OrganizationRole` (OWNER/ADMIN/MEMBER) rather than
+renaming to ADMIN/ENGINEER/VIEWER — no functional gap, and renaming a
+migrated enum is a breaking change for no benefit (ADR-037). No new
+models, no migration: `users.is_active` already existed from
+migration 0001. New auth errors (`AuthenticationRequired`,
+`InvalidToken`, `ExpiredToken`, `UnknownUser`, `DisabledUser`) map to
+401 with `WWW-Authenticate: Bearer` via the existing centralized error
+handler. Does not implement GitHub OAuth, RBAC enforcement, or rate
+limiting — deferred to Security Phases B-F.
+
+Same sandbox restriction as every prior phase. `app/auth/jwt.py` and
+`app/auth/claims.py` are genuinely pure and ran for real via
+`pytest --noconftest`: **12/12 new unit tests passed** (valid/expired/
+malformed/wrong-signature/wrong-issuer/wrong-audience/missing-claim/
+alg-confusion cases); combined with the prior 149 pure tests,
+**161/161 passed**, confirming no regression. `app/auth/principal.py`
+imports `OrganizationRole` from `app.models`, which pulls in SQLAlchemy
+via package init, so `test_auth_principal.py` and `test_auth_api.py`
+are written and `py_compile`-clean but not pytest-executed here. No
+migration was created — `users.is_active` already satisfies the only
+DB-facing requirement.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Security Phase B.
