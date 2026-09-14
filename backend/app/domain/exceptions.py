@@ -452,3 +452,54 @@ class MalformedGitHubIdentity(OAuthError):
 
     def __init__(self, detail: str = "GitHub identity response is malformed") -> None:
         super().__init__(detail)
+
+
+class AuthorizationError(AgentABIError):
+    """Base class for "the caller is authenticated but not allowed to do
+    this" errors (Security Phase C). Distinct from `AuthenticationError`
+    (Phase A: "who is this request from") — authorization answers "what
+    is this identity allowed to do." See docs/DECISIONS.md ADR-042 for
+    why cross-tenant denials (`OrganizationAccessDenied`/
+    `ProjectAccessDenied`) map to 404 while in-tenant permission denials
+    (`PermissionDenied`) map to 403."""
+
+
+class PermissionDenied(AuthorizationError):
+    """Raised when the caller has a real, verified membership in the
+    resource's organization but that role's permission set doesn't
+    include the requested action. Mapped to HTTP 403 — the caller
+    already knows this organization/resource exists and that they're a
+    member of it, so naming the actual reason doesn't leak tenant
+    boundary information."""
+
+    def __init__(self, detail: str = "You do not have permission to perform this action") -> None:
+        super().__init__(detail)
+
+
+class OrganizationAccessDenied(AuthorizationError):
+    """Raised when the caller has no membership at all in the target
+    organization. Mapped to HTTP 404, not 403 (ADR-042) — a 403 would
+    confirm the organization exists; a caller with no relationship to a
+    tenant gets the same response whether it exists or not."""
+
+    def __init__(self) -> None:
+        super().__init__("Not found")
+
+
+class ProjectAccessDenied(AuthorizationError):
+    """Raised when a project exists but the caller has no membership in
+    its organization. Mapped to HTTP 404 for the same reason as
+    `OrganizationAccessDenied` (ADR-042) — deliberately indistinguishable
+    from `ProjectNotFound` to a caller outside the tenant."""
+
+    def __init__(self) -> None:
+        super().__init__("Not found")
+
+
+class DuplicateProject(ConflictError):
+    def __init__(self, organization_id: Any, slug: str) -> None:
+        super().__init__(
+            f"Project with slug={slug!r} already exists in organization {organization_id}"
+        )
+        self.organization_id = organization_id
+        self.slug = slug

@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps.authz import require_project_permission
+from app.authz.permissions import Permission
 from app.core.database import get_db_session
 from app.domain.enums import ComponentType, DependencyRelationshipType
 from app.graph.client import get_driver
@@ -25,6 +27,9 @@ from app.services.component_registry import ComponentRegistryService
 from app.services.dependency_graph import DependencyGraphService
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["graph"])
+
+_READ = Depends(require_project_permission(Permission.GRAPH_READ))
+_WRITE = Depends(require_project_permission(Permission.GRAPH_WRITE))
 
 
 # --- Schemas -----------------------------------------------------------
@@ -159,6 +164,7 @@ BlastRadiusServiceDep = Annotated[BlastRadiusService, Depends(get_blast_radius_s
     "/components/{component_id}/graph/sync",
     response_model=ComponentNodeResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[_WRITE],
 )
 async def sync_component(
     project_id: uuid.UUID, component_id: uuid.UUID, service: GraphServiceDep
@@ -170,6 +176,7 @@ async def sync_component(
 @router.post(
     "/graph/dependencies",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[_WRITE],
 )
 async def create_dependency(
     project_id: uuid.UUID, payload: DependencyCreateRequest, service: GraphServiceDep
@@ -182,6 +189,7 @@ async def create_dependency(
 @router.delete(
     "/graph/dependencies",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[_WRITE],
 )
 async def delete_dependency(
     project_id: uuid.UUID, payload: DependencyCreateRequest, service: GraphServiceDep
@@ -194,6 +202,7 @@ async def delete_dependency(
 @router.get(
     "/components/{component_id}/graph/dependencies",
     response_model=list[DependencyEdgeResponse],
+    dependencies=[_READ],
 )
 async def list_dependencies(
     project_id: uuid.UUID, component_id: uuid.UUID, service: GraphServiceDep
@@ -205,6 +214,7 @@ async def list_dependencies(
 @router.get(
     "/components/{component_id}/graph/dependents",
     response_model=list[DependencyEdgeResponse],
+    dependencies=[_READ],
 )
 async def list_dependents(
     project_id: uuid.UUID, component_id: uuid.UUID, service: GraphServiceDep
@@ -216,6 +226,7 @@ async def list_dependents(
 @router.get(
     "/components/{component_id}/graph/blast-radius",
     response_model=BlastRadiusResponse,
+    dependencies=[_READ],
 )
 async def get_blast_radius(
     project_id: uuid.UUID,

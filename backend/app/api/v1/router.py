@@ -8,12 +8,14 @@ from app.api.v1.compatibility import router as compatibility_router
 from app.api.v1.components import router as components_router
 from app.api.v1.graph import router as graph_router
 from app.api.v1.health import router as health_router
+from app.api.v1.projects import router as projects_router
 from app.api.v1.replays import router as replays_router
 from app.api.v1.trajectories import router as trajectories_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
 api_router.include_router(auth_router)
+api_router.include_router(projects_router)
 api_router.include_router(components_router)
 api_router.include_router(graph_router)
 api_router.include_router(compatibility_router)

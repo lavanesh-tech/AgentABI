@@ -29,6 +29,9 @@ from app.domain.exceptions import (
     NotFoundError,
     OAuthStateInvalid,
     OAuthStateStoreUnavailable,
+    OrganizationAccessDenied,
+    PermissionDenied,
+    ProjectAccessDenied,
     ReplayExecutionFailed,
     ReplayExecutorUnavailable,
     SchemaNormalizationError,
@@ -173,6 +176,22 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request, exc: GitHubOAuthNotConfigured
     ) -> JSONResponse:
         return _error_response(503, str(exc))
+
+    @app.exception_handler(PermissionDenied)
+    async def handle_permission_denied(request: Request, exc: PermissionDenied) -> JSONResponse:
+        return _error_response(403, str(exc))
+
+    @app.exception_handler(OrganizationAccessDenied)
+    async def handle_organization_access_denied(
+        request: Request, exc: OrganizationAccessDenied
+    ) -> JSONResponse:
+        return _error_response(404, str(exc))
+
+    @app.exception_handler(ProjectAccessDenied)
+    async def handle_project_access_denied(
+        request: Request, exc: ProjectAccessDenied
+    ) -> JSONResponse:
+        return _error_response(404, str(exc))
 
     @app.exception_handler(AgentABIError)
     async def handle_generic_domain_error(request: Request, exc: AgentABIError) -> JSONResponse:

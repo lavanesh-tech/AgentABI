@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps.authz import require_project_permission
+from app.authz.permissions import Permission
 from app.core.database import get_db_session
 from app.models.trajectory import Trajectory
 from app.models.trajectory_event import TrajectoryEvent
@@ -22,6 +24,9 @@ from app.services.trajectory_recorder import TrajectoryRecorderService
 from app.trajectory.models import EventType, TrajectoryStatus
 
 router = APIRouter(prefix="/projects/{project_id}/trajectories", tags=["trajectories"])
+
+_READ = Depends(require_project_permission(Permission.TRAJECTORY_READ))
+_WRITE = Depends(require_project_permission(Permission.TRAJECTORY_WRITE))
 
 
 class TrajectoryStartRequest(BaseModel):
@@ -181,7 +186,12 @@ def get_trajectory_recorder(
 ServiceDep = Annotated[TrajectoryRecorderService, Depends(get_trajectory_recorder)]
 
 
-@router.post("", response_model=TrajectoryResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=TrajectoryResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_WRITE],
+)
 async def start_trajectory(
     project_id: uuid.UUID, payload: TrajectoryStartRequest, service: ServiceDep
 ) -> TrajectoryResponse:
@@ -200,7 +210,7 @@ async def start_trajectory(
     return TrajectoryResponse.from_trajectory(trajectory)
 
 
-@router.get("", response_model=TrajectoryListResponse)
+@router.get("", response_model=TrajectoryListResponse, dependencies=[_READ])
 async def list_trajectories(
     project_id: uuid.UUID,
     service: ServiceDep,
@@ -219,7 +229,7 @@ async def list_trajectories(
     )
 
 
-@router.get("/{trajectory_id}", response_model=TrajectoryResponse)
+@router.get("/{trajectory_id}", response_model=TrajectoryResponse, dependencies=[_READ])
 async def get_trajectory(
     project_id: uuid.UUID, trajectory_id: uuid.UUID, service: ServiceDep
 ) -> TrajectoryResponse:
@@ -228,7 +238,10 @@ async def get_trajectory(
 
 
 @router.post(
-    "/{trajectory_id}/events", response_model=EventResponse, status_code=status.HTTP_201_CREATED
+    "/{trajectory_id}/events",
+    response_model=EventResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_WRITE],
 )
 async def append_event(
     project_id: uuid.UUID,
@@ -255,7 +268,7 @@ async def append_event(
     return EventResponse.from_event(event)
 
 
-@router.get("/{trajectory_id}/events", response_model=EventListResponse)
+@router.get("/{trajectory_id}/events", response_model=EventListResponse, dependencies=[_READ])
 async def list_events(
     project_id: uuid.UUID,
     trajectory_id: uuid.UUID,
@@ -275,7 +288,7 @@ async def list_events(
     )
 
 
-@router.post("/{trajectory_id}/complete", response_model=TrajectoryResponse)
+@router.post("/{trajectory_id}/complete", response_model=TrajectoryResponse, dependencies=[_WRITE])
 async def complete_trajectory(
     project_id: uuid.UUID, trajectory_id: uuid.UUID, service: ServiceDep
 ) -> TrajectoryResponse:
@@ -283,7 +296,7 @@ async def complete_trajectory(
     return TrajectoryResponse.from_trajectory(trajectory)
 
 
-@router.post("/{trajectory_id}/fail", response_model=TrajectoryResponse)
+@router.post("/{trajectory_id}/fail", response_model=TrajectoryResponse, dependencies=[_WRITE])
 async def fail_trajectory(
     project_id: uuid.UUID,
     trajectory_id: uuid.UUID,

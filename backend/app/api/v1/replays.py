@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps.authz import require_project_permission
+from app.authz.permissions import Permission
 from app.core.database import get_db_session
 from app.models.replay_run import ReplayRun
 from app.models.replay_step import ReplayStep
@@ -21,6 +23,9 @@ from app.replay.models import ReplayStatus, StepKind, StepStatus
 from app.services.replay_service import ReplayService
 
 router = APIRouter(prefix="/projects/{project_id}/replays", tags=["replays"])
+
+_READ = Depends(require_project_permission(Permission.REPLAY_READ))
+_EXECUTE = Depends(require_project_permission(Permission.REPLAY_EXECUTE))
 
 
 class ReplayCreateRequest(BaseModel):
@@ -132,7 +137,12 @@ def get_replay_service(
 ServiceDep = Annotated[ReplayService, Depends(get_replay_service)]
 
 
-@router.post("", response_model=ReplayResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=ReplayResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_EXECUTE],
+)
 async def create_replay(
     project_id: uuid.UUID, payload: ReplayCreateRequest, service: ServiceDep
 ) -> ReplayResponse:
@@ -147,7 +157,7 @@ async def create_replay(
     return ReplayResponse.from_replay(replay_run)
 
 
-@router.get("", response_model=ReplayListResponse)
+@router.get("", response_model=ReplayListResponse, dependencies=[_READ])
 async def list_replays(
     project_id: uuid.UUID,
     service: ServiceDep,
@@ -166,7 +176,7 @@ async def list_replays(
     )
 
 
-@router.get("/{replay_id}", response_model=ReplayResponse)
+@router.get("/{replay_id}", response_model=ReplayResponse, dependencies=[_READ])
 async def get_replay(
     project_id: uuid.UUID, replay_id: uuid.UUID, service: ServiceDep
 ) -> ReplayResponse:
@@ -174,7 +184,7 @@ async def get_replay(
     return ReplayResponse.from_replay(replay_run)
 
 
-@router.post("/{replay_id}/execute", response_model=ReplayResponse)
+@router.post("/{replay_id}/execute", response_model=ReplayResponse, dependencies=[_EXECUTE])
 async def execute_replay(
     project_id: uuid.UUID, replay_id: uuid.UUID, service: ServiceDep
 ) -> ReplayResponse:
@@ -182,7 +192,7 @@ async def execute_replay(
     return ReplayResponse.from_replay(replay_run)
 
 
-@router.get("/{replay_id}/steps", response_model=ReplayStepListResponse)
+@router.get("/{replay_id}/steps", response_model=ReplayStepListResponse, dependencies=[_READ])
 async def list_steps(
     project_id: uuid.UUID,
     replay_id: uuid.UUID,

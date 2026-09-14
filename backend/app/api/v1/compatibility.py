@@ -14,12 +14,17 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps.authz import require_project_permission
+from app.authz.permissions import Permission
 from app.compatibility.models import Classification, CompatibilityStatus, Severity
 from app.core.database import get_db_session
 from app.models.compatibility_scan import CompatibilityScan
 from app.services.compatibility_service import CompatibilityService
 
 router = APIRouter(prefix="/projects/{project_id}/compatibility", tags=["compatibility"])
+
+_READ = Depends(require_project_permission(Permission.SCAN_READ))
+_EXECUTE = Depends(require_project_permission(Permission.SCAN_EXECUTE))
 
 
 class ScanCreateRequest(BaseModel):
@@ -145,7 +150,12 @@ def get_compatibility_service(
 ServiceDep = Annotated[CompatibilityService, Depends(get_compatibility_service)]
 
 
-@router.post("/scans", response_model=ScanResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/scans",
+    response_model=ScanResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[_EXECUTE],
+)
 async def create_scan(
     project_id: uuid.UUID, payload: ScanCreateRequest, service: ServiceDep
 ) -> ScanResponse:
@@ -155,7 +165,7 @@ async def create_scan(
     return ScanResponse.from_scan(scan)
 
 
-@router.get("/scans", response_model=ScanListResponse)
+@router.get("/scans", response_model=ScanListResponse, dependencies=[_READ])
 async def list_scans(
     project_id: uuid.UUID,
     service: ServiceDep,
@@ -174,13 +184,15 @@ async def list_scans(
     )
 
 
-@router.get("/scans/{scan_id}", response_model=ScanResponse)
+@router.get("/scans/{scan_id}", response_model=ScanResponse, dependencies=[_READ])
 async def get_scan(project_id: uuid.UUID, scan_id: uuid.UUID, service: ServiceDep) -> ScanResponse:
     scan = await service.get_scan(project_id, scan_id)
     return ScanResponse.from_scan(scan)
 
 
-@router.get("/scans/{scan_id}/changes", response_model=list[ScanChangeResponse])
+@router.get(
+    "/scans/{scan_id}/changes", response_model=list[ScanChangeResponse], dependencies=[_READ]
+)
 async def get_scan_changes(
     project_id: uuid.UUID, scan_id: uuid.UUID, service: ServiceDep
 ) -> list[ScanChangeResponse]:
