@@ -1292,3 +1292,72 @@ protected/public routes are correctly (un)secured, and that no secret
 setting value leaks into the generated schema). See
 `docs/SECURITY_VERIFICATION.md` for the final phase-by-phase
 verification status.
+
+## Phase 8: LLM Provider Abstraction + OpenAI Integration
+
+Explains deterministic evidence (compatibility changes today; graph/
+replay evidence can be wired in later without changing this layer) in
+natural language — it never computes evidence. `app/llm/models.py`
+defines provider-agnostic, dependency-free dataclasses:
+`EvidenceItem` (bounded input), `ExplanationRequest`, and
+`ExplanationResponse`. `ExplanationResponse` has no `risk_score`/`pass`/
+`warn`/`block`/`compatibility_status`/`final_decision` field — that's a
+structural guarantee, not just a prompt instruction (spec §10): there is
+no field in the dataclass to put a decision in, so no code path can read
+one back out.
+
+`app/llm/provider.py`'s `LLMProvider` is a `Protocol` — the only thing
+`ExplanationService` (`app/services/explanation_service.py`) depends on.
+`app/providers/openai_provider.py`'s `OpenAIProvider` is the sole
+implementation and the *only file in the codebase that imports the
+`openai` package* (verified by `tests/test_llm_architectural_invariant.
+py`, which walks the AST of every module under `app/`). It uses the
+Responses API (`client.responses.create`) with Structured Outputs
+(`text.format.type="json_schema"`, `strict=True`) so parsing never
+depends on brittle free-form text extraction, and maps every OpenAI SDK
+exception (timeout, connection, auth, rate limit, generic) to one of
+four domain errors (`LLMProviderTimeout`/`LLMProviderUnavailable`/
+`LLMProviderNotConfigured`/`LLMExplanationFailed`/`LLMInvalidResponse`)
+without ever including the raw SDK error body or headers, which could
+echo the API key.
+
+`ExplanationService.explain_compatibility_changes` bounds the evidence
+deterministically first (`app/llm/bounding.py`: max 25 items, clipped
+summary/detail text — never the LLM's choice what to drop), builds the
+`ExplanationRequest` with an `allowed_reference_ids` set derived from
+that bounded evidence, calls the provider, and validates the response's
+cited evidence references against that same set *again* — defense in
+depth, since `OpenAIProvider` already validates once against its own
+request. `app/providers/fake_provider.py`'s `FakeLLMProvider` makes the
+whole chain testable with zero network calls or API credits (`success`/
+`timeout`/`error`/`invalid_reference` modes).
+
+`POST /api/v1/projects/{project_id}/compatibility/scans/{scan_id}/
+explain` is the one exposed endpoint — reuses `Permission.SCAN_EXECUTE`
+(the same elevated ADMIN/OWNER-only permission that triggers a scan,
+since this calls a paid API) and the existing `scan_replay` Redis
+rate-limit bucket, rather than adding a second permission or limiter.
+
+No API key is required for the application to start, for every
+deterministic feature to work, or for any test outside the explanation
+layer to pass (spec §25) — `OpenAIProvider` raises
+`LLMProviderNotConfigured` only when `explain()` is actually called with
+no key. Default model is `gpt-4o-mini` (cheap, fast, Structured-Output-
+capable — this is bounded text summarization, not a task needing a
+frontier reasoning model), overridable via `OPENAI_MODEL`.
+
+Gemini (originally Phase 9) is intentionally not implemented — the
+project now targets OpenAI only. The `LLMProvider` Protocol and the
+`get_llm_provider` factory (`app/api/deps/llm.py`) are the seam a future
+provider would implement; nothing about `ExplanationService` or the API
+route would need to change.
+
+Same sandbox restriction as every prior phase: `openai` (like fastapi/
+sqlalchemy) isn't installable here. Pure logic (`app/llm/bounding.py`,
+the AST-based architectural-invariant test) ran for real — **8/8
+passed**. `tests/test_explanation_service.py` (uses only
+`FakeLLMProvider`, no OpenAI dependency) and `tests/
+test_openai_provider_mock.py` (mocks the `openai` SDK boundary) are
+written and `py_compile`-clean but need `pytest-asyncio`, also not
+installable here, so they did not execute this session — see
+docs/DECISIONS.md.

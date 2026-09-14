@@ -2,6 +2,49 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-052 — No decision field exists in `ExplanationResponse`; the LLM/deterministic boundary is structural (2026-09-14)
+
+Spec §10 mandates the LLM output schema must not contain
+`risk_score`/`pass`/`warn`/`block`/`compatibility_status`/
+`final_decision`. Rather than relying only on a prompt instruction (spec
+§11, which is also present, as defense in depth) or on API-layer
+filtering, `app/llm/models.py`'s `ExplanationResponse` dataclass simply
+has no such field — there is nowhere in the type for a decision to be
+put, so no downstream code can accidentally read one back out even if a
+future provider tried to add one. `tests/
+test_llm_architectural_invariant.py` additionally proves via AST
+inspection that no deterministic package (`compatibility`, `graph`,
+`replay`, `trajectory`, `domain`) imports `openai` at all, and that the
+`openai` package name appears nowhere outside `app/providers/
+openai_provider.py`.
+
+## ADR-051 — Bounded evidence, not LLM-chosen evidence (2026-09-14)
+
+Spec §13 forbids letting the model decide what evidence to discard.
+`app/llm/bounding.py`'s `bound_evidence()` is a pure function applied
+*before* an `ExplanationRequest` is ever constructed: fixed max item
+count (25) and per-field character clips, order-preserving (callers are
+expected to pre-sort by importance). Truncation is recorded on the
+request (`truncated: bool`) and surfaced back in the response's
+`limitations` — the model is told evidence was cut, never asked to
+choose what to cut.
+
+## ADR-050 — `LLMProvider` as a `typing.Protocol`; OpenAI import confined to one module (2026-09-14)
+
+Spec §4/§17 requires the core application to depend on an abstraction,
+not the OpenAI SDK directly, and requires the architecture to stay
+extensible to a future provider without a rewrite. A `Protocol`
+(structural typing, no explicit inheritance required) rather than an
+ABC — `FakeLLMProvider` (tests) and `OpenAIProvider` both satisfy it
+just by having a matching `explain()` coroutine. The `openai` package is
+imported nowhere except `app/providers/openai_provider.py` (lazily,
+inside `explain()`, so the rest of the app never needs `openai`
+installed just to start) — enforced by an AST-walking test, not just
+convention. No Gemini branch exists in `app/api/deps/llm.py`'s factory
+(Phase 9 is skipped per this phase's explicit instruction), but adding
+one later is a new class + one new `if`, not a change to
+`ExplanationService` or any route.
+
 ## ADR-042 — Cross-tenant denial is 404; in-tenant permission denial is 403 (2026-09-14)
 
 **Context:** Security Phase C spec §7/§19 requires deciding, consistently,

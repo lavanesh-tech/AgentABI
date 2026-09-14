@@ -39,6 +39,11 @@ from app.domain.exceptions import (
     InvalidDependencyRelationship,
     InvalidReplaySubstitution,
     InvalidTrajectoryEvent,
+    LLMExplanationFailed,
+    LLMInvalidResponse,
+    LLMProviderNotConfigured,
+    LLMProviderTimeout,
+    LLMProviderUnavailable,
     MalformedGitHubIdentity,
     MissingAuthorizationCode,
     MissingWebhookDeliveryId,
@@ -110,6 +115,11 @@ _DOMAIN_ERROR_MAP: dict[type[Exception], tuple[int, str]] = {
     WebhookSignatureError: (status.HTTP_401_UNAUTHORIZED, INVALID_WEBHOOK_SIGNATURE),
     GitHubWebhookNotConfigured: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
     MissingWebhookDeliveryId: (status.HTTP_400_BAD_REQUEST, INVALID_REQUEST),
+    LLMProviderNotConfigured: (status.HTTP_503_SERVICE_UNAVAILABLE, SERVICE_UNAVAILABLE),
+    LLMProviderTimeout: (status.HTTP_504_GATEWAY_TIMEOUT, UPSTREAM_ERROR),
+    LLMProviderUnavailable: (status.HTTP_502_BAD_GATEWAY, UPSTREAM_ERROR),
+    LLMInvalidResponse: (status.HTTP_502_BAD_GATEWAY, UPSTREAM_ERROR),
+    LLMExplanationFailed: (status.HTTP_502_BAD_GATEWAY, UPSTREAM_ERROR),
     AgentABIError: (status.HTTP_400_BAD_REQUEST, INVALID_REQUEST),
 }
 

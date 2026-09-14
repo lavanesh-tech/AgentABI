@@ -88,8 +88,21 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:9092"
 
     # --- AI providers (never hardcode; empty means "not configured") ------
+    # OpenAI-only for now (Phase 8) — Gemini stays defined but unused
+    # (Phase 9 skipped, see docs/ROADMAP.md) so Settings doesn't need to
+    # change shape if a Gemini/other provider is added later.
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
+
+    # --- OpenAI explanation provider (Phase 8) -------------------------
+    # gpt-4o-mini: cheap, fast, and structured-output-capable — this is a
+    # text-summarization task over already-computed evidence, not a task
+    # that needs a frontier reasoning model. Overridable per deployment;
+    # never hardwired into business logic (only read here and passed
+    # through to `OpenAIProvider` — see docs/DECISIONS.md).
+    openai_model: str = "gpt-4o-mini"
+    openai_timeout_seconds: float = 30.0
+    openai_max_retries: int = 2
 
     # --- GitHub integration -------------------------------------------------
     # `github_webhook_secret` (Security Phase E): environment-only, no

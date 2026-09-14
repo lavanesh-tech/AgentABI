@@ -580,3 +580,67 @@ class WebhookDeliveryConflict(ConflictError):
             f"Webhook delivery {delivery_id!r} was already recorded with different content"
         )
         self.delivery_id = delivery_id
+
+
+# --- LLM explanation layer (Phase 8) ----------------------------------------
+
+
+class LLMError(AgentABIError):
+    """Base class for the explanation layer's errors. Never carries the
+    API key, raw provider headers, or a full internal error body — see
+    `app/providers/openai_provider.py`."""
+
+
+class LLMProviderNotConfigured(LLMError):
+    """Raised when a provider call is attempted with no API key
+    configured (spec §25) — distinct from every other LLM error because
+    it's a configuration state, not a runtime failure. The application
+    itself starts fine with no key; only an actual explanation attempt
+    fails, and fails clearly. Mapped to HTTP 503."""
+
+    def __init__(self, provider: str) -> None:
+        super().__init__(f"LLM provider {provider!r} is not configured (no API key)")
+        self.provider = provider
+
+
+class LLMProviderUnavailable(LLMError):
+    """Raised for a connection-level failure talking to the provider
+    (network error, non-timeout transport failure). Mapped to HTTP 502."""
+
+    def __init__(self, provider: str, detail: str) -> None:
+        super().__init__(f"LLM provider {provider!r} unavailable: {detail}")
+        self.provider = provider
+        self.detail = detail
+
+
+class LLMProviderTimeout(LLMError):
+    """Raised when a provider call exceeds its configured timeout.
+    Mapped to HTTP 504."""
+
+    def __init__(self, provider: str, timeout_seconds: float) -> None:
+        super().__init__(f"LLM provider {provider!r} timed out after {timeout_seconds}s")
+        self.provider = provider
+        self.timeout_seconds = timeout_seconds
+
+
+class LLMInvalidResponse(LLMError):
+    """Raised when the provider returns a response that doesn't conform
+    to the expected structured schema (malformed JSON, missing required
+    field, or an invalid evidence reference — spec §12). Mapped to HTTP
+    502: the request was fine, the upstream response wasn't usable."""
+
+    def __init__(self, provider: str, detail: str) -> None:
+        super().__init__(f"LLM provider {provider!r} returned an invalid response: {detail}")
+        self.provider = provider
+        self.detail = detail
+
+
+class LLMExplanationFailed(LLMError):
+    """Raised for a provider-reported failure that isn't a timeout or
+    transport error — e.g. an authentication error, a rate limit from
+    the provider itself, or a content refusal. Mapped to HTTP 502."""
+
+    def __init__(self, provider: str, detail: str) -> None:
+        super().__init__(f"LLM provider {provider!r} failed to produce an explanation: {detail}")
+        self.provider = provider
+        self.detail = detail
