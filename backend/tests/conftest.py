@@ -27,7 +27,7 @@ async def client():
 
 
 # Mirrors the immutability triggers created by migrations
-# 0002/0003/0004. Base.metadata.create_all() (used only in tests, never
+# 0002/0003/0004/0005. Base.metadata.create_all() (used only in tests, never
 # for the app's real schema — see docs/ARCHITECTURE.md) creates tables
 # from the ORM but knows nothing about raw-SQL triggers, so any test that
 # needs a database-level immutability backstop needs it created here too.
@@ -84,6 +84,20 @@ CREATE TRIGGER trg_trajectory_events_immutable
 BEFORE UPDATE ON trajectory_events
 FOR EACH ROW
 EXECUTE FUNCTION prevent_trajectory_event_mutation();
+
+CREATE OR REPLACE FUNCTION prevent_replay_step_mutation()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION
+        'replay_steps are immutable once created (id=%)', OLD.id;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_replay_steps_immutable ON replay_steps;
+CREATE TRIGGER trg_replay_steps_immutable
+BEFORE UPDATE ON replay_steps
+FOR EACH ROW
+EXECUTE FUNCTION prevent_replay_step_mutation();
 """
 
 

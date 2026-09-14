@@ -2,6 +2,85 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-036 — Phase 7 verification: pure planner/executor logic ran for real; persistence was verified by direct DDL (2026-09-14)
+
+**Context:** Same sandbox restriction as every prior phase — SQLAlchemy/
+FastAPI/httpx cannot be installed.
+
+**What ran for real:** `app/replay/` has no SQLAlchemy/Pydantic/FastAPI
+import, so `pytest --noconftest` ran 3 pure test files for real — 25/25
+passed, combined with Phase 5/6's 124, 149/149. `ruff format`/`ruff
+check` clean; `python3.12 -m py_compile` clean; `mypy app` fails on the
+same pre-existing `pydantic.mypy` error as every prior phase.
+
+**What was verified instead (ADR-008 pattern):** migration 0005 applied
+via raw SQL to a fresh local Postgres 16 (this session's container does
+not persist database state — schema re-transcribed from scratch, same
+as Phase 6). Directly exercised: the spec's 7-step checkout acceptance
+plan persisted in deterministic sequence order with the substituted step
+referencing candidate v6 while the original `trajectory_events` row
+stayed at baseline v5; the `replay_steps` immutability trigger rejecting
+an `UPDATE`; `replay_runs` accepting a legitimate status `UPDATE` (no
+trigger); the `(replay_run_id, sequence_number)` unique constraint; the
+partial `(project_id, idempotency_key)` index (same-project duplicate
+rejected, cross-project reuse allowed); and cascade delete from
+`trajectories`.
+
+**What could not be verified:** `test_replay_service.py` (10 tests) and
+`test_replays_api.py` (9 tests) need SQLAlchemy/FastAPI/httpx — not
+exercised this session.
+
+**Action for the user:** run `make install && make lint && make
+typecheck && make test && alembic upgrade head` locally.
+
+## ADR-035 — Idempotency-key retries for replay creation, reusing the ADR-029 pattern exactly (2026-09-14)
+
+**Context:** Replay creation, like trajectory start (Phase 6), is
+instrumentation-triggered and may be retried.
+
+**Decision:** `ReplayRun.idempotency_key`, unique per project via a
+partial index (`WHERE idempotency_key IS NOT NULL`), same "exact match
+returns existing, conflict rejects" shape as ADR-029's
+`external_run_id`/`external_event_id` handling — no new idempotency
+concept invented for this phase, just the same one applied to a third
+resource.
+
+## ADR-034 — A structured execution failure is normal evidence; an executor raising is a domain error (2026-09-14)
+
+**Context:** Phase 7 must never silently fall back to historical output
+after a required candidate execution fails, but also must not treat
+every failure as an exceptional server error.
+
+**Decision:** `ExecutionOutcome(status="failed", ...)` — the candidate
+ran and failed — is recorded as a normal `ReplayStep` with
+`status=FAILED`; the replay run transitions to `FAILED` and execution
+stops (no further steps, no fallback to baseline output). An executor
+that *raises* instead of returning a structured outcome (a transport or
+programming error) is different: caught, the run is transitioned to
+`FAILED` first so state stays consistent, then re-raised as
+`ReplayExecutionFailed` (HTTP 422) — distinguishing "the candidate
+failed" (expected, informative) from "the execution machinery itself
+broke" (unexpected).
+
+## ADR-033 — Replay evidence: insert steps once, already finalized, never insert-then-update (2026-09-14)
+
+**Context:** `replay_steps` needs the same unconditional immutability
+trigger Phase 6 gave `trajectory_events` (ADR-027), but a naive design
+(`INSERT` a `PENDING` step, later `UPDATE` it to `EXECUTED`) would
+directly contradict an unconditional "reject every `UPDATE`" trigger.
+
+**Decision:** `ReplayRun.plan` (JSONB) is computed once by
+`app/replay/planner.py` at creation and stored on the mutable
+`replay_runs` row (which has no trigger, mirroring `trajectories`).
+`execute_replay()` walks that stored plan and calls `INSERT` on
+`replay_steps` exactly once per step, only after that step's outcome
+(reused/skipped/provider-required, or an executor's actual result) is
+already known — never before. This keeps `replay_steps` a pure
+append-only evidence table, consistent with every other append-only
+table in this codebase (Phase 5's scan evidence, Phase 6's
+`trajectory_events`), instead of carving out a special "mutable during
+execution" exception for it.
+
 ## ADR-032 — Phase 6 verification: pure trajectory logic ran for real; persistence/API were verified by direct DDL, not through `pytest` (2026-09-13)
 
 **Context:** Same sandbox restriction as every prior phase (ADR-005/006/

@@ -705,3 +705,139 @@ numbers, and the generic-engine acceptance case) and
 but could not be executed through `pytest` itself this session (need
 SQLAlchemy/FastAPI/httpx, unavailable — same restriction as every prior
 phase). See ADR-032 for the full account.
+
+## Phase 7: Deterministic Replay Engine
+
+```
+backend/
+  app/
+    replay/
+      models.py       # ReplayStatus, StepKind, StepStatus, TrajectoryEventView,
+                       # ReplayPlanStep, ReplayPlan, ExecutionOutcome
+      transitions.py    # is_valid_transition()/is_terminal() for ReplayStatus
+      planner.py          # build_replay_plan() — pure, deterministic classification
+      executor.py           # ReplayExecutor Protocol, ExecutorRegistry, FakeReplayExecutor
+    models/
+      replay_run.py    # ReplayRun ORM model (mutable status, like Trajectory)
+      replay_step.py     # ReplayStep ORM model (append-only, like TrajectoryEvent)
+    repositories/
+      replay_repository.py # atomic transition_status(), ordered list_steps()
+    services/
+      replay_service.py    # ReplayService — create/execute/get/list, plan
+                            # serialization, executor dispatch, idempotency
+    api/v1/
+      replays.py       # create, list, get, execute, list steps
+      errors.py          # + InvalidReplaySubstitution, ReplayExecutorUnavailable,
+                          # ReplayExecutionFailed
+  alembic/versions/
+    0005_replays.py    # replay_runs, replay_steps, 3 new enums, partial unique
+                        # idempotency index, prevent_replay_step_mutation() trigger
+  tests/
+    test_replay_transitions.py  # pure unit tests
+    test_replay_planner.py        # pure unit tests (incl. the spec's acceptance case)
+    test_replay_executor.py         # pure unit tests (FakeReplayExecutor/registry)
+    test_replay_service.py            # real-Postgres integration tests
+    test_replays_api.py                 # real-Postgres + HTTP integration tests
+```
+
+### Replay is plan-then-execute, never trajectory→LLM→guessed outcome
+
+`ReplayService.create_replay()` only builds and persists a deterministic
+plan (`app/replay/planner.py`); no execution happens until a separate
+`execute_replay()` call. Nothing in either path calls a model — the plan
+decides what's reused, substituted, or provider-required from structural
+facts (event type, component/version identity) the same way Phase 5's
+`rules.py` decides compatibility classifications: lookup logic over
+recorded facts, not judgment calls.
+
+### Classification: substitute, skip, reuse, or defer to a provider
+
+`build_replay_plan()` walks a trajectory's events in `sequence_number`
+order (never timestamp order) and classifies each one: an invocation
+event (`TOOL_CALL`/`MCP_REQUEST`/`API_REQUEST`) matching the baseline
+component *and* version being replaced becomes `SUBSTITUTED_EXECUTION`
+(re-run with the candidate, historical arguments preserved verbatim);
+its paired response (matched by `invocation_id`) becomes `SKIPPED`,
+explicitly justified as superseded — keeping the baseline's response as
+if it were the replay's own result would misrepresent what happened.
+`MODEL_REQUEST`/`MODEL_RESPONSE` become `PROVIDER_EXECUTION_REQUIRED`:
+Phase 7 has no provider adapter (Phase 8/9), so it names the gap rather
+than fabricating a response. Everything else — a different component's
+invocation, state events, agent lifecycle events — is `REUSED_EVIDENCE`,
+carried forward unchanged. A plan with zero substituted steps (the
+baseline was never actually invoked) is rejected outright
+(`InvalidReplaySubstitution`) rather than silently producing a no-op
+replay.
+
+### Plan-then-insert-once, not insert-then-update
+
+A `ReplayRun`'s `plan` (JSONB) is computed once at creation and never
+recomputed; `execute_replay()` walks that stored plan and inserts each
+`ReplayStep` exactly once, already in its final status — never insert a
+`PENDING` row and later `UPDATE` it to `EXECUTED`/`FAILED`. This is what
+lets `replay_steps` carry the same unconditional immutability trigger as
+Phase 6's `trajectory_events` with no contradiction: nothing ever needs
+to mutate a step after the fact. `replay_runs` gets no trigger, mirroring
+Phase 6's `trajectories`/ADR-027 split — its `status`/`started_at`/
+`completed_at`/`error` genuinely change over the run's lifecycle,
+protected only by `ReplayService` never exposing another mutation path.
+
+### Execution boundary: no executor wired means an explicit failure
+
+`ExecutorRegistry` ships empty in production wiring — Phase 7 has
+nothing real to execute yet (tool/MCP/API integrations and provider
+adapters are later phases). Reaching a `SUBSTITUTED_EXECUTION` step with
+no matching executor deterministically raises
+`ReplayExecutorUnavailable` and marks the run `FAILED`, rather than
+silently skipping the step or fabricating a result. `FakeReplayExecutor`
+is the only implementation this phase ships: deterministic, in-memory,
+records every invocation, never touches a network — used exclusively in
+tests to prove the orchestration (candidate invoked, not baseline;
+historical arguments preserved; original trajectory untouched).
+
+### Why this shape
+
+- **Dataclasses/Protocol, not Pydantic/ABC, for `app/replay/`** —
+  mirrors Phase 5/6's testability choice: zero SQLAlchemy/Pydantic/
+  FastAPI imports keeps the planner and executor contract runnable
+  through the real installed `pytest` binary via `--noconftest`.
+- **A structured `ExecutionOutcome(status="failed", ...)` is normal
+  evidence; an executor *raising* is `ReplayExecutionFailed`** — the
+  former is the candidate genuinely failing (recorded, replay stops,
+  never falls back to historical output); the latter is a
+  transport/programming error, distinct enough to need its own domain
+  error.
+- **Idempotency mirrors Phase 6 exactly** — `idempotency_key` on
+  `ReplayRun`, a partial unique index per project, "exact match returns
+  existing, conflict rejects" — reusing ADR-029's pattern rather than
+  inventing a second idempotency scheme.
+
+### Verification in this session
+
+`app/replay/` is dataclass/`Protocol`-only, so it ran through the real,
+already-installed standalone `pytest` binary via `pytest --noconftest`:
+**25/25 new pure unit tests passed** (`test_replay_transitions.py`,
+`test_replay_planner.py` — including the spec's exact 7-event checkout
+acceptance case proving v6 is invoked with v5's historical arguments
+while the original trajectory stays untouched — `test_replay_executor.py`);
+combined with Phase 5/6's 124, **149/149 passed**, confirming no
+regression. `ruff format --check`/`ruff check` clean;
+`python3.12 -m py_compile` clean on every file; `mypy` fails on the same
+pre-existing `pydantic.mypy` plugin-import error as every prior phase.
+
+Migration 0005 was verified by direct DDL execution against a real local
+Postgres 16 (same ADR-008 pattern): the acceptance case's 7-step replay
+plan persisted in deterministic sequence order; the substituted step
+correctly referencing candidate v6 while the original `trajectory_events`
+row stayed at baseline v5 with its original output; the
+`replay_steps` immutability trigger rejecting an `UPDATE`; `replay_runs`
+accepting a legitimate status `UPDATE` (no trigger, by design); the
+`(replay_run_id, sequence_number)` unique constraint rejecting a
+duplicate; the partial `(project_id, idempotency_key)` unique index
+rejecting a same-project duplicate while allowing the same key in a
+different project; and `ON DELETE CASCADE` from `trajectories` removing
+a replay run and its steps. `test_replay_service.py` (10 tests) and
+`test_replays_api.py` (9 tests) are written and `py_compile`-clean but
+could not be executed through `pytest` itself this session (need
+SQLAlchemy/FastAPI/httpx, unavailable — same restriction as every prior
+phase).

@@ -238,3 +238,82 @@ class TrajectoryPayloadTooLarge(AgentABIError):
         self.field_name = field_name
         self.size_bytes = size_bytes
         self.limit_bytes = limit_bytes
+
+
+class ReplayNotFound(NotFoundError):
+    def __init__(self, replay_id: Any) -> None:
+        super().__init__(f"Replay {replay_id} not found")
+        self.replay_id = replay_id
+
+
+class ReplayAlreadyExists(ConflictError):
+    """Raised when a `create_replay` call's `idempotency_key` already
+    identifies a different replay in this project *and* the new
+    request's identifying fields (trajectory/baseline/candidate)
+    conflict with the existing one — an exact-duplicate retry instead
+    returns the existing replay (mirrors Phase 6 ADR-029). Mapped to
+    HTTP 409."""
+
+    def __init__(self, project_id: Any, idempotency_key: str) -> None:
+        super().__init__(
+            f"Replay with idempotency_key={idempotency_key!r} already exists in "
+            f"project {project_id} with conflicting details"
+        )
+        self.project_id = project_id
+        self.idempotency_key = idempotency_key
+
+
+class InvalidReplayTransition(ConflictError):
+    """Raised when `execute_replay` targets a replay that isn't PENDING
+    (already RUNNING/COMPLETED/FAILED). Mapped to HTTP 409."""
+
+    def __init__(self, replay_id: Any, current_status: Any, target_status: Any) -> None:
+        super().__init__(
+            f"Replay {replay_id} cannot transition from {current_status!r} to {target_status!r}"
+        )
+        self.replay_id = replay_id
+        self.current_status = current_status
+        self.target_status = target_status
+
+
+class InvalidReplaySubstitution(AgentABIError):
+    """Raised when a requested baseline->candidate substitution is
+    meaningless: candidate/baseline don't share a component, the source
+    trajectory never actually invoked the baseline version, the source
+    trajectory isn't COMPLETED, or a component/version reference doesn't
+    belong to the resolved project. Mapped to HTTP 422."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
+class ReplayExecutorUnavailable(AgentABIError):
+    """Raised when `execute_replay` reaches a step that needs a real
+    executor for its event type and none is registered — Phase 7 wires
+    no production executors (there is nothing real to execute until
+    Phase 8/9's provider adapters and later tool/MCP/API integrations
+    exist), so this is the expected, explicit failure mode rather than a
+    silent no-op. Mapped to HTTP 503."""
+
+    def __init__(self, replay_id: Any, event_type: Any) -> None:
+        super().__init__(
+            f"No executor available for event_type={event_type!r} while executing replay "
+            f"{replay_id}"
+        )
+        self.replay_id = replay_id
+        self.event_type = event_type
+
+
+class ReplayExecutionFailed(AgentABIError):
+    """Raised when an executor itself raises unexpectedly (a transport/
+    programming error), distinct from a structured `ExecutionOutcome`
+    with `status="failed"` — the latter is normal recorded evidence
+    (the candidate ran and failed), not an exception. Mapped to HTTP
+    422; the replay run is transitioned to FAILED before this is
+    raised, so state stays consistent."""
+
+    def __init__(self, replay_id: Any, detail: str) -> None:
+        super().__init__(f"Replay {replay_id} execution failed: {detail}")
+        self.replay_id = replay_id
+        self.detail = detail
