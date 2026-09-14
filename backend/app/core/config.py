@@ -71,6 +71,17 @@ class Settings(BaseSettings):
     jwt_audience: str = "agentabi-api"
     jwt_access_token_expire_minutes: int = 60
 
+    # --- GitHub OAuth2 login (Security Phase B) -------------------------
+    # No real credentials ship here or in .env.example — empty defaults
+    # mean "not configured" (mirrors openai_api_key/gemini_api_key
+    # above), same as every provider secret in this file. Production
+    # sources these from the environment (later, AWS Secrets Manager);
+    # nothing in this codebase ever logs github_client_secret.
+    github_oauth_client_id: str | None = None
+    github_oauth_client_secret: str | None = None
+    github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
+    github_oauth_state_ttl_seconds: int = 600
+
     @property
     def is_local(self) -> bool:
         return self.environment == "local"

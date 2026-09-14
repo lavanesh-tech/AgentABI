@@ -4,6 +4,7 @@ always reloaded per request, never trusted from a JWT (see
 `app/auth/claims.py`)."""
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,3 +24,11 @@ class OrganizationMemberRepository:
             OrganizationMember.organization_id == organization_id,
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def list_for_user(self, user_id: uuid.UUID) -> Sequence[OrganizationMember]:
+        """Used by the GitHub OAuth callback (Security Phase B) to decide
+        whether an org context can be attached to the issued JWT: exactly
+        one membership -> that org; zero or many -> `organization_id=None`
+        (see `app/services/github_oauth_service.py`)."""
+        stmt = select(OrganizationMember).where(OrganizationMember.user_id == user_id)
+        return (await self._session.execute(stmt)).scalars().all()

@@ -14,13 +14,21 @@ from app.domain.exceptions import (
     AgentABIError,
     AuthenticationError,
     ConflictError,
+    GitHubAuthorizationDenied,
+    GitHubIdentityLookupFailed,
+    GitHubOAuthNotConfigured,
+    GitHubTokenExchangeFailed,
     GraphUnavailable,
     InvalidCompatibilityComparison,
     InvalidComponentContent,
     InvalidDependencyRelationship,
     InvalidReplaySubstitution,
     InvalidTrajectoryEvent,
+    MalformedGitHubIdentity,
+    MissingAuthorizationCode,
     NotFoundError,
+    OAuthStateInvalid,
+    OAuthStateStoreUnavailable,
     ReplayExecutionFailed,
     ReplayExecutorUnavailable,
     SchemaNormalizationError,
@@ -119,6 +127,52 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request, exc: ReplayExecutionFailed
     ) -> JSONResponse:
         return _error_response(422, str(exc))
+
+    @app.exception_handler(OAuthStateInvalid)
+    async def handle_oauth_state_invalid(request: Request, exc: OAuthStateInvalid) -> JSONResponse:
+        return _error_response(401, str(exc))
+
+    @app.exception_handler(GitHubAuthorizationDenied)
+    async def handle_github_authorization_denied(
+        request: Request, exc: GitHubAuthorizationDenied
+    ) -> JSONResponse:
+        return _error_response(401, str(exc))
+
+    @app.exception_handler(MissingAuthorizationCode)
+    async def handle_missing_authorization_code(
+        request: Request, exc: MissingAuthorizationCode
+    ) -> JSONResponse:
+        return _error_response(400, str(exc))
+
+    @app.exception_handler(GitHubTokenExchangeFailed)
+    async def handle_github_token_exchange_failed(
+        request: Request, exc: GitHubTokenExchangeFailed
+    ) -> JSONResponse:
+        return _error_response(502, str(exc))
+
+    @app.exception_handler(GitHubIdentityLookupFailed)
+    async def handle_github_identity_lookup_failed(
+        request: Request, exc: GitHubIdentityLookupFailed
+    ) -> JSONResponse:
+        return _error_response(502, str(exc))
+
+    @app.exception_handler(MalformedGitHubIdentity)
+    async def handle_malformed_github_identity(
+        request: Request, exc: MalformedGitHubIdentity
+    ) -> JSONResponse:
+        return _error_response(502, str(exc))
+
+    @app.exception_handler(OAuthStateStoreUnavailable)
+    async def handle_oauth_state_store_unavailable(
+        request: Request, exc: OAuthStateStoreUnavailable
+    ) -> JSONResponse:
+        return _error_response(503, str(exc))
+
+    @app.exception_handler(GitHubOAuthNotConfigured)
+    async def handle_github_oauth_not_configured(
+        request: Request, exc: GitHubOAuthNotConfigured
+    ) -> JSONResponse:
+        return _error_response(503, str(exc))
 
     @app.exception_handler(AgentABIError)
     async def handle_generic_domain_error(request: Request, exc: AgentABIError) -> JSONResponse:

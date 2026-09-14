@@ -2,6 +2,48 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-040 — Zero/multiple org memberships yield `organization_id=None`, never an automatic pick (2026-09-14)
+
+**Context:** Security Phase B spec §10: a GitHub-authenticated user may
+have zero or several `OrganizationMember` rows. "Do not silently grant
+ADMIN/OWNER privileges. Do not automatically add a new user to an
+arbitrary existing organization... Security takes priority over
+convenience."
+
+**Decision:** `GitHubOAuthService.handle_callback` attaches an
+`organization_id`/`role` to the issued JWT only when the user has
+*exactly one* membership. Zero memberships -> `organization_id=None`,
+`requires_onboarding=True` in the callback response. Multiple
+memberships -> also `organization_id=None` (ambiguous — picking one
+automatically would be an undocumented, arbitrary privilege choice),
+`requires_onboarding=False`. In both `None` cases, authentication still
+succeeds and an AgentABI JWT is still issued: login (proving who you
+are) is not blocked on org resolution, but the token carries zero
+organization-scoped privilege until a later phase's org-selection/
+onboarding flow runs. This mirrors ADR-038's existing "role may be
+`None`" design rather than inventing a second mechanism.
+
+## ADR-039 — OAuth `state` failures collapse to one error, like `InvalidToken` (2026-09-14)
+
+**Context:** Security Phase B spec §14 lists "invalid/expired/reused
+OAuth state" as separate cases to handle securely, and §16 asks for unit
+tests distinguishing missing/malformed/expired/reused/mismatched state.
+
+**Decision:** All of these are tested distinctly at the `OAuthStateStore`
+contract level (`tests/test_oauth_state.py` — 8 pure tests covering
+each case), but `GitHubOAuthService.handle_callback` raises a single
+`OAuthStateInvalid` for any `consume()` failure, regardless of reason.
+This mirrors `InvalidToken`'s precedent (ADR before this log's Phase A
+entries): telling a caller *which* state-validation reason applied
+would help an attacker distinguish "this state never existed" from
+"this state existed but expired" from "this state was already used" —
+information a CSRF-protection mechanism should not leak. `Redis`'s
+`GETDEL` cannot reliably distinguish "expired" from "already consumed"
+from "never existed" after the fact regardless (all three look
+identical: key not present), so a uniform error is also the only
+consistent behavior across `RedisOAuthStateStore` and
+`InMemoryOAuthStateStore`.
+
 ## ADR-038 — Role is a JWT-absent, per-request database lookup, not an embedded claim (2026-09-14)
 
 **Context:** Security Phase A's spec explicitly asks: "Document whether

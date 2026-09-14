@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.database import dispose_engine
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import CorrelationIdMiddleware
+from app.core.redis import dispose_redis_client
 from app.graph.client import dispose_driver
 
 settings = get_settings()
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
     await dispose_engine()
     await dispose_driver()
+    await dispose_redis_client()
     logger.info("shutdown")
 
 
