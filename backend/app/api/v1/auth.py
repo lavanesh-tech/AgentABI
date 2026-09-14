@@ -1,17 +1,22 @@
-"""Authentication API — Security Phase A's protected-endpoint proof
-(spec §8). GitHub OAuth login/callback is Security Phase B; this router
-only proves that a valid AgentABI JWT resolves to a real, active user.
+"""Authentication API. `/me` (Security Phase A) proves that a valid
+AgentABI JWT resolves to a real, active user. `/github/login` and
+`/github/callback` (Security Phase B) are the OAuth2 login flow itself —
+GitHub authenticates the person; AgentABI JWT issuance at the end of the
+callback is the only thing routes elsewhere ever check.
 """
 
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict
 
 from app.api.deps.auth import get_current_user
+from app.api.deps.github_oauth import get_github_oauth_service
 from app.auth.principal import AuthenticatedPrincipal
 from app.models.organization_member import OrganizationRole
+from app.services.github_oauth_service import GitHubCallbackResult, GitHubOAuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -43,3 +48,47 @@ async def get_me(
     principal: Annotated[AuthenticatedPrincipal, Depends(get_current_user)],
 ) -> AuthMeResponse:
     return AuthMeResponse.from_principal(principal)
+
+
+class GitHubCallbackResponse(BaseModel):
+    """Explicit response model for a successful callback. Carries the
+    AgentABI JWT (`access_token`) only — never the GitHub OAuth access
+    token, never a client secret (spec §13/§20)."""
+
+    access_token: str
+    token_type: str = "bearer"
+    user_id: uuid.UUID
+    email: str
+    organization_id: uuid.UUID | None
+    role: OrganizationRole | None
+    requires_onboarding: bool
+
+    @classmethod
+    def from_result(cls, result: GitHubCallbackResult) -> "GitHubCallbackResponse":
+        return cls(
+            access_token=result.access_token,
+            user_id=result.user_id,
+            email=result.email,
+            organization_id=result.organization_id,
+            role=result.role,
+            requires_onboarding=result.requires_onboarding,
+        )
+
+
+@router.get("/github/login")
+async def github_login(
+    service: Annotated[GitHubOAuthService, Depends(get_github_oauth_service)],
+) -> RedirectResponse:
+    start = await service.start_login()
+    return RedirectResponse(url=start.authorization_url, status_code=302)
+
+
+@router.get("/github/callback", response_model=GitHubCallbackResponse)
+async def github_callback(
+    service: Annotated[GitHubOAuthService, Depends(get_github_oauth_service)],
+    code: Annotated[str | None, Query()] = None,
+    state: Annotated[str | None, Query()] = None,
+    error: Annotated[str | None, Query()] = None,
+) -> GitHubCallbackResponse:
+    result = await service.handle_callback(code=code, state=state, error=error)
+    return GitHubCallbackResponse.from_result(result)

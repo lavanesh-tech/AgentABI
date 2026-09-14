@@ -925,3 +925,103 @@ tokens, and a response-shape assertion that only the four public fields
 ever serialize) are written and `py_compile`-clean but need SQLAlchemy/
 FastAPI/httpx, unavailable this session. No migration was needed or
 created — `users.is_active` already exists from migration 0001.
+
+## Security Phase B: GitHub OAuth2
+
+```
+backend/
+  app/
+    auth/
+      oauth_state.py     # generate_state(), OAuthStateStore Protocol,
+                          # RedisOAuthStateStore (prod), InMemory... (tests)
+    core/
+      redis.py            # get_redis_client()/dispose_redis_client() — same
+                           # lazy-singleton pattern as core/database.py
+    github/
+      oauth_models.py     # GitHubIdentity, GitHubTokenResponse,
+                           # GitHubOAuthClient Protocol (httpx-free — see below)
+      oauth_client.py      # HttpxGitHubOAuthClient — the only module that
+                            # calls GitHub over HTTP
+    services/
+      github_oauth_service.py  # GitHubOAuthService — login/callback orchestration
+    api/deps/
+      github_oauth.py     # wires RedisOAuthStateStore + HttpxGitHubOAuthClient
+    api/v1/auth.py        # + GET /auth/github/login, GET /auth/github/callback
+    models/user.py        # + github_user_id (unique), github_login
+    domain/exceptions.py  # + OAuthError and 7 subclasses
+  alembic/versions/
+    0006_github_identity.py  # users.github_user_id/github_login
+  tests/
+    test_oauth_state.py         # pure unit tests (state store contract)
+    test_github_oauth_service.py # orchestration tests via FakeGitHubOAuthClient
+    test_github_oauth_api.py     # HTTP integration tests, GitHub mocked
+```
+
+Flow: `GET /auth/github/login` generates a random `state`, saves it
+(Redis, TTL'd), and 302-redirects to GitHub with minimal scopes
+(`read:user user:email` — identity + email only, no repository access).
+`GET /auth/github/callback` validates+consumes `state` *before* trusting
+anything else in the request, exchanges `code` for a GitHub access
+token, fetches the GitHub identity, resolves/creates the AgentABI
+`User` (matched by GitHub's immutable numeric id, never `login`), reads
+existing `OrganizationMember` rows to decide whether an org context can
+be attached, and issues a normal Phase A JWT via the same
+`app/auth/jwt.py` used everywhere else — no second token design, no
+GitHub token inside the JWT.
+
+### `GitHubOAuthClient` lives split across two modules
+
+The Protocol (`oauth_models.py`) has no `httpx` import; the real
+implementation (`oauth_client.py`) does. This split exists purely so
+`GitHubOAuthService` and its tests can import the Protocol type without
+pulling in `httpx`, which is not installable in this sandbox — the same
+reason `app/replay/executor.py`'s `ReplayExecutor` Protocol is decoupled
+from any concrete executor.
+
+### GitHub access token is never persisted
+
+`token.access_token` from `exchange_code()` is used exactly once, to
+call `fetch_identity()`, and then goes out of scope. It is never written
+to the database, never logged (not a bound `structlog` field anywhere),
+and never appears in `GitHubCallbackResponse` — only the AgentABI JWT
+does. See spec §12; revisited if/when a future phase needs GitHub API
+access on the user's behalf (would require explicit encrypted storage).
+
+### Organization membership resolution — see ADR-040
+
+Zero or multiple `OrganizationMember` rows both yield
+`organization_id=None` on the issued JWT — no automatic org join, no
+silently granted role. See ADR-040 for the full reasoning.
+
+### OAuth state — see ADR-039
+
+State validation failures (missing/malformed/expired/reused/mismatched)
+are tested distinctly at the store level but collapse to one
+`OAuthStateInvalid` error at the service/API boundary, mirroring
+`InvalidToken`'s precedent. `RedisOAuthStateStore` fails closed
+(`OAuthStateStoreUnavailable`, HTTP 503) rather than silently skipping
+validation if Redis is unreachable.
+
+### Verification in this session
+
+`app/auth/oauth_state.py` has no SQLAlchemy/FastAPI/redis import, so it
+ran through the real `pytest` binary via `pytest --noconftest`: **8/8
+new pure unit tests passed** (random/unique state, save-then-consume,
+one-time use, missing/malformed/expired/mismatched state). Combined with
+every other pure test file in the suite, **189/189 passed**, confirming
+no regression. `ruff format --check`/`ruff check` clean; `python3.12 -m
+py_compile` clean across `app`, `tests`, and the new migration; `mypy`
+fails on the same pre-existing `pydantic.mypy` error as every prior
+phase. `test_github_oauth_service.py` (8 tests, via
+`FakeGitHubOAuthClient` — no real GitHub call) and
+`test_github_oauth_api.py` (5 tests, GitHub mocked via dependency
+override) are written and `py_compile`-clean but need SQLAlchemy/
+FastAPI/httpx, unavailable this session — same bucket as
+`test_auth_api.py`/`test_replays_api.py`. Migration `0006`'s DDL (add columns, unique constraint, index, and the
+downgrade) was verified by direct execution against a real local
+Postgres 16 (same ADR-008 pattern as prior phases): existing rows keep
+NULL `github_user_id`/`github_login` unaffected, multiple NULLs coexist,
+linking a second user to an already-linked `github_user_id` is rejected
+by the unique constraint, and downgrade cleanly removes both columns.
+Run `alembic upgrade head` against the full migration chain to confirm
+end-to-end.

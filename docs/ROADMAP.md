@@ -31,7 +31,7 @@ Security work (layered onto the phases above, tracked separately):
 | # | Security Phase | Status |
 |---|-----------------|--------|
 | A | Authentication foundation (JWT) | ✅ Done (see caveat in DECISIONS.md ADR-037) |
-| B | GitHub OAuth2 | ⬜ Not started |
+| B | GitHub OAuth2 | ✅ Done (see caveats in DECISIONS.md ADR-039/040) |
 | C | RBAC / project authorization | ⬜ Not started |
 | D-F | (rate limiting, webhook security, audit, docs — as scoped when reached) | ⬜ Not started |
 
@@ -292,3 +292,34 @@ DB-facing requirement.
 Run `make install && make lint && make typecheck && make test &&
 alembic upgrade head` locally to complete verification before starting
 Security Phase B.
+
+## Security Phase B notes
+
+GitHub OAuth2 login: `GET /auth/github/login` (random `state`, Redis-
+backed TTL store, minimal `read:user user:email` scopes) redirects to
+GitHub; `GET /auth/github/callback` validates+consumes `state` first,
+exchanges `code`, fetches the GitHub identity (matched by GitHub's
+immutable numeric id, never `login`), resolves/creates the `User`,
+decides org context (exactly-one-membership only — ADR-040), and issues
+a normal Phase A JWT. GitHub's access token is used once and discarded
+— never persisted, logged, or returned. `users.github_user_id`/
+`github_login` added via migration `0006`; state-failure and GitHub-
+provider errors get 7 new centralized error types (ADR-039). Does not
+implement RBAC enforcement, project authorization, rate limiting,
+webhook security, or GitHub API scopes beyond login — deferred to
+Security Phases C-F.
+
+Same sandbox restriction as every prior phase (`redis`/`httpx` not
+installable). `app/auth/oauth_state.py` has no SQLAlchemy/FastAPI/redis
+import and ran for real via `pytest --noconftest`: **8/8 new pure unit
+tests passed**; combined with the full existing pure suite,
+**189/189 passed**, confirming no regression. Migration `0006`'s DDL
+(add columns, unique constraint, index, downgrade) was verified by
+direct execution against real Postgres 16. `test_github_oauth_service.py`
+(8 tests, via `FakeGitHubOAuthClient`) and `test_github_oauth_api.py`
+(5 tests, GitHub mocked) are written and `py_compile`-clean but not
+pytest-executed here — need SQLAlchemy/FastAPI/httpx.
+
+Run `make install && make lint && make typecheck && make test &&
+alembic upgrade head` locally to complete verification before starting
+Security Phase C.

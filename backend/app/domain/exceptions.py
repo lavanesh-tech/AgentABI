@@ -372,3 +372,83 @@ class DisabledUser(AuthenticationError):
 
     def __init__(self) -> None:
         super().__init__("User account is disabled")
+
+
+class OAuthError(AgentABIError):
+    """Base class for GitHub OAuth2 login failures (Security Phase B).
+    Distinct from `AuthenticationError` (Phase A): these happen *before*
+    an AgentABI JWT exists at all, during the OAuth dance itself."""
+
+
+class OAuthStateInvalid(OAuthError):
+    """Raised for any state validation failure: missing, malformed,
+    unknown, expired, or already-consumed. Deliberately one error for
+    all of these (mirrors `InvalidToken`'s ADR-032 precedent) — telling
+    a caller *which* reason applies would help an attacker distinguish
+    a live state value from a dead one. Mapped to HTTP 401."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid or expired OAuth state")
+
+
+class OAuthStateStoreUnavailable(OAuthError):
+    """Raised when the state store (Redis) cannot be reached. Failing
+    the login/callback outright is the secure choice — silently
+    skipping state validation because the store is down would defeat
+    CSRF protection entirely. Mapped to HTTP 503."""
+
+    def __init__(self) -> None:
+        super().__init__("OAuth state store is unavailable")
+
+
+class GitHubOAuthNotConfigured(OAuthError):
+    """Raised when `GITHUB_OAUTH_CLIENT_ID`/`GITHUB_OAUTH_CLIENT_SECRET`
+    are unset. Failing explicitly is safer than building an
+    authorization URL with a missing client id. Mapped to HTTP 503."""
+
+    def __init__(self) -> None:
+        super().__init__("GitHub OAuth is not configured")
+
+
+class MissingAuthorizationCode(OAuthError):
+    """Raised when the callback has no `code` query parameter. Mapped
+    to HTTP 400."""
+
+    def __init__(self) -> None:
+        super().__init__("GitHub callback is missing the authorization code")
+
+
+class GitHubAuthorizationDenied(OAuthError):
+    """Raised when GitHub's callback carries an `error` parameter (the
+    user declined the authorization). Mapped to HTTP 401."""
+
+    def __init__(self, detail: str = "GitHub authorization was denied") -> None:
+        super().__init__(detail)
+
+
+class GitHubTokenExchangeFailed(OAuthError):
+    """Raised when exchanging the authorization code for an access
+    token fails or returns an unexpected shape. Never carries the
+    upstream response body (may contain the client secret's request
+    context) or the code itself. Mapped to HTTP 502."""
+
+    def __init__(self) -> None:
+        super().__init__("Failed to exchange GitHub authorization code")
+
+
+class GitHubIdentityLookupFailed(OAuthError):
+    """Raised when fetching the authenticated GitHub user (or their
+    email) fails at the transport/HTTP level. Mapped to HTTP 502."""
+
+    def __init__(self) -> None:
+        super().__init__("Failed to retrieve GitHub identity")
+
+
+class MalformedGitHubIdentity(OAuthError):
+    """Raised when GitHub's user/email response is missing fields this
+    application requires (stable numeric id, or any usable email).
+    Never a fabricated placeholder email is substituted. Mapped to
+    HTTP 502."""
+
+    def __init__(self, detail: str = "GitHub identity response is malformed") -> None:
+        super().__init__(detail)
