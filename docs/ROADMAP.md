@@ -482,9 +482,89 @@ to complete verification before starting Phase 10.
 
 ## Phase 14 — Frontend Dashboard: COMPLETE
 
-## Phase 15 — OpenTelemetry: NEXT
+## Phase 15 — OpenTelemetry: COMPLETE
+
+## Phase 16 — Prometheus + Grafana: NEXT
 
 Gemini (Phase 9) remains SKIPPED/OPTIONAL.
+
+## Phase 15 — OpenTelemetry: COMPLETE (detail)
+
+Adds `backend/app/observability/` (`tracing.py`, `propagation.py`,
+`redaction.py`) — the single module every other file imports from
+rather than touching `opentelemetry.*` directly. `OTEL_ENABLED=false` by
+default (spec §5): a disabled/uninstalled process never imports the SDK
+at all (ADR-071), so nothing about this phase can break existing
+behavior. Traces the path `GitHub Webhook -> FastAPI -> Kafka Producer ->
+Kafka -> Worker -> Compatibility/Replay/Differential/Risk -> Postgres/
+Neo4j/Redis -> GitHub API -> optional OpenAI explanation`: FastAPI
+auto-instrumentation (`FastAPIInstrumentor`, idempotent per app
+instance), SQLAlchemy auto-instrumentation on the engine, manual domain
+spans at five service boundaries (`agentabi.compatibility.analyze`,
+`agentabi.replay.execute`, `agentabi.differential.analyze`,
+`agentabi.risk.evaluate`, `agentabi.github.pr_analysis`) added by
+wrapping each entrypoint around a renamed `_*_impl` rather than
+importing OTel into `app/risk/`'s pure engine (ADR-072), manual
+producer/consumer spans (`agentabi.kafka.publish`/`.consume`) with
+mandatory W3C trace-context propagation through Kafka **headers only**
+(`app/observability/propagation.py`; envelope schema/partition key/
+idempotency/commit policy byte-for-byte unchanged — ADR-072), manual
+client spans around the GitHub checks client (`github.check.create`/
+`.update`), GitHub OAuth exchange (`github.oauth.exchange`), the OpenAI
+provider boundary (`agentabi.openai.explain`), the Neo4j repository's
+single `_run` Cypher boundary (`neo4j.query`, operation = leading Cypher
+keyword only, never full Cypher/params), and Redis rate-limit/OAuth-
+state boundaries (no key/state value ever attached). `app/core/
+logging.py` gained a `_add_trace_context` processor enriching every log
+line with `trace_id`/`span_id` when a span is active, alongside (never
+replacing) the existing `correlation_id`. The standalone Kafka worker
+(`app/kafka/worker.py`) initializes/shuts down its own tracer provider
+independently of FastAPI, with `service.name=agentabi-worker` vs the
+API's `agentabi-api`. `docker-compose.yml` gained an `otel-collector`
+service (`otel/opentelemetry-collector-contrib`, config at
+`observability/otel-collector-config.yaml`, stdout-only exporter, no
+credentials) that the API/worker are never `depends_on` — spec §28:
+readiness never depends on collector availability. See docs/
+ARCHITECTURE.md's Phase 15 section and docs/DECISIONS.md ADR-071/
+ADR-072.
+
+Same sandbox restriction as every prior phase, now confirmed to also
+cover `opentelemetry-*`: `pip install opentelemetry-api` returns "No
+matching distribution found" — PyPI itself is unreachable in this
+sandbox (not just compiled/network-heavy packages), so none of the
+declared `opentelemetry-api/-sdk/-exporter-otlp-proto-http/
+-instrumentation-fastapi/-httpx/-sqlalchemy` dependencies could be
+installed or exercised. Every module touching them (all of `app/
+observability/`, and every call site listed above) is written and
+`python3.12 -m py_compile`-clean, and `ruff format --check`/`ruff check`
+are clean across the full `app`/`tests` tree (`259 files unchanged`, `0`
+lint errors after one `--fix` pass for import-sorting/quoted-annotation
+style). `mypy` is unavailable (`No module named mypy`), same as every
+phase. New tests — `tests/test_observability_redaction.py` (pure stdlib,
+would run under plain `pytest` with no project dependencies once
+`pytest` itself is installed — it isn't, in this sandbox, this session),
+`tests/test_observability_propagation.py` (asserts the documented no-op
+path: `inject_trace_headers()` returns `[]`, `extract_trace_context`
+returns `None` for missing/empty/malformed headers, never raises),
+`tests/test_observability_log_correlation.py`, `tests/
+test_kafka_trace_regression.py` (the mandatory spec §35 check —
+structural assertions via `inspect.getsource` that the publisher/
+consumer inject/extract via Kafka `headers=`, never touch
+`event.metadata` or the serialized envelope bytes), and `tests/
+test_observability_domain_spans.py` (needs the real SDK + Postgres via
+the `session` fixture — an in-memory span exporter asserting
+`agentabi.compatibility.analyze` is emitted and the scan result is
+unchanged) — are all written/`py_compile`-clean, not pytest-executed.
+`docker compose config` validates cleanly with the new `otel-collector`
+service added (confirmed by direct invocation, not assumed). No real
+trace smoke test was attempted — §42 requires both installable
+dependencies and a running collector; neither is available here, so it
+was honestly skipped rather than fabricated.
+
+Run `cd backend && pip install -e ".[dev]" && pytest && cd .. && docker
+compose up -d otel-collector api worker` locally, with `OTEL_ENABLED=true`,
+to complete verification and produce a real trace before starting
+Phase 16.
 
 ## Phase 14 — Frontend Dashboard: COMPLETE (detail)
 

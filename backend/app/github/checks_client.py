@@ -26,6 +26,7 @@ from app.github.checks_models import (
     CheckStatus,
     GitHubCredentialProvider,
 )
+from app.observability import start_span
 
 CHECKS_API_BASE = "https://api.github.com"
 _GITHUB_API_VERSION = "2022-11-28"
@@ -95,13 +96,30 @@ class HttpxGitHubChecksClient:
 
     async def create_check_run(self, request: CheckRunRequest) -> CheckRunResult:
         url = f"{CHECKS_API_BASE}/repos/{request.repository_full_name}/check-runs"
-        return await self._send("POST", url, request)
+        with start_span(
+            "github.check.create",
+            kind="client",
+            attributes={
+                "agentabi.github_repository_full_name": request.repository_full_name,
+                "agentabi.head_sha": request.head_sha,
+            },
+        ):
+            return await self._send("POST", url, request)
 
     async def update_check_run(
         self, *, repository_full_name: str, check_run_id: int, request: CheckRunRequest
     ) -> CheckRunResult:
         url = f"{CHECKS_API_BASE}/repos/{repository_full_name}/check-runs/{check_run_id}"
-        return await self._send("PATCH", url, request)
+        with start_span(
+            "github.check.update",
+            kind="client",
+            attributes={
+                "agentabi.github_repository_full_name": repository_full_name,
+                "agentabi.check_run_id": check_run_id,
+                "agentabi.head_sha": request.head_sha,
+            },
+        ):
+            return await self._send("PATCH", url, request)
 
     async def _send(self, method: str, url: str, request: CheckRunRequest) -> CheckRunResult:
         token = await self.credentials.get_token()

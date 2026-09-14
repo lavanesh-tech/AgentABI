@@ -1888,3 +1888,109 @@ added `web` service cleanly; `docker build ./frontend` could not run
 (daemon not running in this sandbox). See docs/ROADMAP.md's Phase 14
 detail section for the exact commands to run locally to complete
 verification.
+
+## Phase 15: OpenTelemetry Distributed Tracing
+
+**Purpose**: trace one request/event across every hop — `GitHub Webhook
+-> FastAPI -> Kafka Producer -> Kafka -> Worker -> Compatibility/Replay/
+Differential/Risk -> Postgres/Neo4j/Redis -> GitHub API -> optional
+OpenAI explanation` — as pure observability. Tracing never influences
+PASS/WARN/BLOCK, compatibility classification, blast radius, or any
+other deterministic result (spec §2/§41); every span helper is designed
+so removing it changes nothing but what's exported.
+
+**Central module** (`app/observability/`, the only place that touches
+`opentelemetry.*`):
+- `tracing.py` — `setup_tracing(settings)` (idempotent, process-wide,
+  no-op unless `OTEL_ENABLED=true` and the SDK is importable),
+  `shutdown_tracing()`, `start_span(name, attributes=, kind=,
+  parent_context=)` (the one span-creation helper every other module
+  uses — degrades to a no-op contextmanager yielding `None`),
+  `set_current_span_attributes(...)`, `current_trace_context()` (for
+  log enrichment), `instrument_fastapi_app`/`instrument_httpx`/
+  `instrument_sqlalchemy`.
+- `propagation.py` — `inject_trace_headers()`/`extract_trace_context()`,
+  W3C `traceparent`/`tracestate` as Kafka header tuples
+  (`list[tuple[str, bytes]]`). Pure, no-op when OTel is unavailable.
+- `redaction.py` — `safe_attributes()`, the single redaction boundary
+  every span attribute passes through: drops any key matching a broad
+  substring blocklist (`authorization`, `*token*`, `*secret*`,
+  `*password*`, `*api_key*`, `cookie`, `jwt`, ...) entirely (no
+  placeholder value), truncates long strings, and stringifies non-
+  primitive values rather than attaching them raw.
+
+**Config** (`Settings`, all prefixed `otel_`): `otel_enabled` (default
+`False`), `otel_service_name` (`agentabi-api` default; the worker
+overrides to `agentabi-worker` at `setup_tracing()` call time via
+`settings.model_copy(update=...)`), `otel_service_version`,
+`otel_exporter_otlp_endpoint`, `otel_exporter_otlp_protocol`,
+`otel_traces_sampler` (`always_on`/`always_off`/
+`parentbased_traceidratio`, default the latter), `otel_traces_sampler_arg`
+(default `1.0` — local-dev "trace everything"; production sets a lower
+ratio via env, never hardcoded), `otel_environment` (falls back to
+`environment` via `otel_resource_environment`).
+
+**Correlation ID vs trace ID**: `X-Correlation-ID` (spec §8, unchanged
+from Security Phase D) remains the request-identity mechanism used by
+`app/api/v1/errors.py` and audit logging; trace/span IDs are a separate,
+additive concern. `app/core/logging.py`'s new `_add_trace_context`
+processor adds `trace_id`/`span_id` to every log line emitted inside an
+active span, alongside — never replacing — `correlation_id`.
+
+**Kafka propagation (mandatory, spec §10)**: `KafkaEventPublisher.publish`
+calls `inject_trace_headers()` and passes the result as `send_and_wait`'s
+`headers=` kwarg; `KafkaEventConsumer._process_one` calls
+`extract_trace_context(message.headers)` and passes the resulting
+context as `start_span`'s `parent_context`, so the consumer span is a
+child of the producer's span. `EventEnvelope`'s field set is completely
+unchanged — trace context never enters the payload or `metadata` dict.
+`tests/test_kafka_trace_regression.py` asserts this structurally.
+
+**Domain spans** (`agentabi.compatibility.analyze`,
+`agentabi.replay.execute`, `agentabi.differential.analyze`,
+`agentabi.risk.evaluate`, `agentabi.github.pr_analysis`): each service's
+public entrypoint now wraps a renamed `_*_impl` method in `start_span`,
+rather than importing `app.observability` into `app/risk/`'s pure
+engine (spec §15 — kept exactly as isolated as `tests/
+test_risk_architectural_invariant.py` already enforces).
+
+**Outbound HTTP / DB / graph / cache**: `instrument_httpx()` (global
+`HTTPXClientInstrumentor`, covers the GitHub checks client, GitHub OAuth
+client, and OpenAI's httpx-backed SDK with zero per-call-site changes)
+and `instrument_sqlalchemy()` (bound to the async engine in `app/core/
+database.py`, no bind-parameter capture) are auto-instrumentation;
+`github.check.create`/`.update` and `github.oauth.exchange` are also
+manually named (auto-instrumentation alone doesn't give them AgentABI-
+specific semantics). Neo4j has no mature stable OTel instrumentation
+this phase relies on, so `Neo4jGraphRepository._run` — the single
+Cypher-execution boundary every repository method already funnels
+through — gets one manual `neo4j.query` span per call, tagged only with
+the query's leading clause keyword (`MERGE`/`MATCH`/...), never full
+Cypher text or bound params. Redis similarly gets manual boundary spans
+(`redis.rate_limit.check`, `redis.oauth_state.save`/`.consume`) with no
+rate-limit key or OAuth state value ever attached.
+
+**Failure-open** (spec §24/§28): every SDK/exporter construction path in
+`setup_tracing`/`instrument_*` catches all exceptions and logs a
+warning rather than raising; a down collector, bad endpoint, or missing
+package never fails startup, webhook processing, Kafka processing, or
+readiness. `GET /api/v1/ready` has no telemetry dependency.
+
+**Local collector**: `docker-compose.yml`'s `otel-collector` service
+(`otel/opentelemetry-collector-contrib`, `observability/otel-collector-
+config.yaml` — OTLP receiver on 4317/4318, stdout `debug` exporter, no
+credentials, no cloud exporter). The `api` service is never
+`depends_on` it. OTLP is the sole exporter boundary — AgentABI is never
+coupled to a specific tracing backend; point the collector's config at
+Jaeger/Tempo/a vendor endpoint later without touching application code.
+
+**Verification**: `opentelemetry-*` are pure-Python wheels but, like
+every other dependency in this project, could not be installed in this
+sandbox this session (`pip install opentelemetry-api` — "No matching
+distribution found", PyPI itself unreachable). All observability code
+is written, `ruff format --check`/`ruff check`/`python3.12 -m
+py_compile` clean; new tests are written/`py_compile`-clean, not
+pytest-executed (no project dependency, including `pytest` itself, is
+installed this session). `docker compose config` validates the added
+service. No real trace smoke test was produced — both a working install
+and a running collector are required and neither is available here.

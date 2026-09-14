@@ -18,6 +18,7 @@ from app.events.envelope import EventEnvelope, deserialize_envelope
 from app.github.checks_client import HttpxGitHubChecksClient, StaticGitHubCredentialProvider
 from app.kafka.analysis_handler import AnalysisRequestHandler
 from app.kafka.consumer import KafkaEventConsumer
+from app.observability import setup_tracing, shutdown_tracing
 
 logger = structlog.get_logger(__name__)
 
@@ -62,6 +63,10 @@ async def _dlq_publish(raw: bytes, failure_category: str, retry_count: int) -> N
 async def main() -> None:
     settings = get_settings()
     configure_logging(settings)
+    # spec §29: worker telemetry is independent of FastAPI — same
+    # resource attributes, different `service.name` so API and worker
+    # traces are distinguishable in a backend.
+    setup_tracing(settings.model_copy(update={"otel_service_name": "agentabi-worker"}))
     logger.info("kafka_worker_starting", group=settings.kafka_consumer_group)
 
     session_factory = get_session_factory()
@@ -106,6 +111,7 @@ async def main() -> None:
         await consumer.stop()
         await result_publisher.stop()
         await dispose_engine()
+        shutdown_tracing()
         logger.info("kafka_worker_stopped")
 
 

@@ -210,11 +210,23 @@ class Neo4jGraphRepository:
     async def _run(self, query: str, **params: object) -> list[dict[str, Any]]:
         from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
-        try:
-            result = await self._driver.execute_query(query, **params)
-        except (ServiceUnavailable, Neo4jError) as exc:
-            raise GraphUnavailable(str(exc)) from exc
-        return [record.data() for record in result.records]
+        from app.observability import start_span
+
+        # spec §17: no official/mature Neo4j auto-instrumentation is
+        # relied on here — one manual span per Cypher call, at this
+        # single execution boundary every repository method already
+        # funnels through. `operation` is just the query's leading
+        # clause keyword (e.g. "MERGE", "MATCH") — never the full
+        # Cypher text or bound params, which may carry business data.
+        operation = query.strip().split(None, 1)[0] if query.strip() else "unknown"
+        with start_span(
+            "neo4j.query", kind="client", attributes={"agentabi.neo4j_operation": operation}
+        ):
+            try:
+                result = await self._driver.execute_query(query, **params)
+            except (ServiceUnavailable, Neo4jError) as exc:
+                raise GraphUnavailable(str(exc)) from exc
+            return [record.data() for record in result.records]
 
     async def upsert_component_node(self, node: ComponentNode) -> None:
         await self._run(

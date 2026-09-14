@@ -16,6 +16,20 @@ import structlog
 from app.core.config import Settings
 
 
+def _add_trace_context(logger: Any, method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
+    """Phase 15 spec §9: enrich logs emitted inside a traced execution
+    with `trace_id`/`span_id`, alongside (never replacing)
+    `correlation_id`. A no-op outside any span, or when OTel isn't
+    installed/enabled — `current_trace_context()` never raises."""
+
+    from app.observability.tracing import current_trace_context
+
+    ctx = current_trace_context()
+    if ctx:
+        event_dict.update(ctx)
+    return event_dict
+
+
 def configure_logging(settings: Settings) -> None:
     """Configure stdlib logging + structlog once, at process startup."""
 
@@ -30,6 +44,7 @@ def configure_logging(settings: Settings) -> None:
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso"),
+        _add_trace_context,
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
     ]

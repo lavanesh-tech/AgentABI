@@ -31,6 +31,7 @@ from app.models.compatibility_scan import CompatibilityScan
 from app.models.differential_report import DifferentialReportRecord
 from app.models.risk_assessment import RiskAssessmentRecord
 from app.models.risk_rule_result import RiskRuleResultRecord
+from app.observability import start_span
 from app.repositories.compatibility_scan_repository import CompatibilityScanRepository
 from app.repositories.differential_repository import DifferentialRepository
 from app.repositories.project_repository import ProjectRepository
@@ -67,6 +68,39 @@ class RiskService:
         self._blast_radius = blast_radius
 
     async def run_assessment(
+        self,
+        project_id: uuid.UUID,
+        *,
+        compatibility_scan_id: uuid.UUID | None = None,
+        differential_report_id: uuid.UUID | None = None,
+    ) -> RiskAssessmentRecord:
+        """Phase 15 spec §14/§15 domain span boundary — wraps
+        `_run_assessment_impl` at the service boundary rather than
+        importing OpenTelemetry into `app/risk/`'s pure engine."""
+
+        with start_span(
+            "agentabi.risk.evaluate",
+            attributes={
+                "agentabi.project_id": str(project_id),
+                "agentabi.compatibility_scan_id": str(compatibility_scan_id)
+                if compatibility_scan_id
+                else None,
+                "agentabi.differential_report_id": str(differential_report_id)
+                if differential_report_id
+                else None,
+            },
+        ) as span:
+            record = await self._run_assessment_impl(
+                project_id,
+                compatibility_scan_id=compatibility_scan_id,
+                differential_report_id=differential_report_id,
+            )
+            if span is not None:
+                span.set_attribute("agentabi.risk_decision", record.decision)
+                span.set_attribute("agentabi.risk_score", record.score)
+            return record
+
+    async def _run_assessment_impl(
         self,
         project_id: uuid.UUID,
         *,

@@ -170,6 +170,29 @@ class Settings(BaseSettings):
     github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
     github_oauth_state_ttl_seconds: int = 600
 
+    # --- OpenTelemetry (Phase 15) -----------------------------------------
+    # Off by default (spec §5): AgentABI must run identically whether or
+    # not a collector exists. Nothing here is a secret — OTLP endpoints
+    # are infrastructure addresses, not credentials.
+    otel_enabled: bool = False
+    otel_service_name: str = "agentabi-api"
+    otel_service_version: str = "0.1.0"
+    # No production hostname hardcoded (spec §6) — local dev default only.
+    otel_exporter_otlp_endpoint: str = "http://localhost:4318"
+    otel_exporter_otlp_protocol: Literal["http/protobuf", "grpc"] = "http/protobuf"
+    otel_traces_sampler: Literal["always_on", "always_off", "parentbased_traceidratio"] = (
+        "parentbased_traceidratio"
+    )
+    otel_traces_sampler_arg: float = 1.0
+    # Falls back to `environment` when unset — kept distinct so an
+    # OTel-only environment label can differ without touching the
+    # broader `environment` literal (e.g. a "staging-tracing-canary").
+    otel_environment: str | None = None
+
+    @property
+    def otel_resource_environment(self) -> str:
+        return self.otel_environment or self.environment
+
     @property
     def is_local(self) -> bool:
         return self.environment == "local"

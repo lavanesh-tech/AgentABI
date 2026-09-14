@@ -43,6 +43,14 @@ auth flow, and the API-client/TanStack Query boundary. GitHub OAuth
 requires setting the backend's `github_oauth_redirect_uri` to the
 frontend's own `/auth/callback` route (see docs/DECISIONS.md ADR-070).
 
+## Tracing
+
+Distributed tracing (OpenTelemetry) is off by default
+(`OTEL_ENABLED=false`) and never required for normal operation. To try
+it locally: `docker compose up -d otel-collector`, set
+`OTEL_ENABLED=true` for the API/worker, and watch collector stdout for
+spans. See docs/ARCHITECTURE.md's Phase 15 section.
+
 ## Security & API
 
 Access to non-public APIs requires an AgentABI JWT obtained via GitHub

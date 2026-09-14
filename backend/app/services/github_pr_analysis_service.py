@@ -70,6 +70,7 @@ from app.models.compatibility_scan import CompatibilityScan
 from app.models.github_pr_analysis import GitHubPullRequestAnalysis
 from app.models.github_repository_mapping import GitHubRepositoryMapping
 from app.models.risk_assessment import RiskAssessmentRecord
+from app.observability import start_span
 from app.repositories.github_pr_analysis_repository import GitHubPRAnalysisRepository
 from app.repositories.github_repository_mapping_repository import (
     GitHubRepositoryMappingRepository,
@@ -252,6 +253,31 @@ class GitHubPullRequestAnalysisService:
         return analysis, True
 
     async def run_analysis(
+        self,
+        *,
+        project_id: Any,
+        analysis_id: Any,
+        expected_head_sha: str,
+    ) -> GitHubPullRequestAnalysis:
+        """Phase 15 spec §14 domain span boundary — wraps the actual
+        pipeline (`_run_analysis_impl`) rather than importing
+        OpenTelemetry into the deterministic engines it calls."""
+
+        with start_span(
+            "agentabi.github.pr_analysis",
+            attributes={
+                "agentabi.project_id": str(project_id),
+                "agentabi.github_pr_analysis_id": str(analysis_id),
+                "agentabi.head_sha": expected_head_sha,
+            },
+        ):
+            return await self._run_analysis_impl(
+                project_id=project_id,
+                analysis_id=analysis_id,
+                expected_head_sha=expected_head_sha,
+            )
+
+    async def _run_analysis_impl(
         self,
         *,
         project_id: Any,

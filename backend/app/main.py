@@ -20,10 +20,21 @@ from app.core.redis import dispose_redis_client
 from app.core.request_size import RequestSizeLimitMiddleware
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.graph.client import dispose_driver
+from app.observability import (
+    instrument_fastapi_app,
+    instrument_httpx,
+    setup_tracing,
+    shutdown_tracing,
+)
 
 settings = get_settings()
 configure_logging(settings)
 logger = get_logger(__name__)
+# Process-wide, idempotent (spec §30) — safe even though `create_app()`
+# runs once per test in this codebase's suite. No-op when
+# `OTEL_ENABLED=false` (the default) or the SDK isn't installed.
+setup_tracing(settings)
+instrument_httpx(settings)
 
 
 @asynccontextmanager
@@ -40,6 +51,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.events.factory import dispose_event_publisher
 
         await dispose_event_publisher()
+    # Flushes/closes the OTel exporter (spec §4/§29). A no-op when
+    # tracing was never initialized.
+    shutdown_tracing()
     logger.info("shutdown")
 
 
@@ -73,6 +87,10 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
     register_exception_handlers(app)
+
+    # spec §7/§30: instruments this specific app instance, guarded
+    # against double-instrumentation; no-op when tracing is disabled.
+    instrument_fastapi_app(app, settings)
 
     return app
 

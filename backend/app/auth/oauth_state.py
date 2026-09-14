@@ -68,20 +68,28 @@ class RedisOAuthStateStore:
         self._redis = redis_client
 
     async def save(self, state: str, *, ttl_seconds: int) -> None:
-        try:
-            # NX: a collision would mean two identical 256-bit random
-            # values were generated independently — treat that as a
-            # hard failure rather than silently overwriting.
-            await self._redis.set(_hash_state(state), "1", ex=ttl_seconds, nx=True)
-        except Exception as exc:  # redis.RedisError, connection errors, ...
-            raise OAuthStateStoreUnavailable() from exc
+        from app.observability import start_span
+
+        # spec §18: never the state value itself on the span — only
+        # that a save happened.
+        with start_span("redis.oauth_state.save", kind="client"):
+            try:
+                # NX: a collision would mean two identical 256-bit random
+                # values were generated independently — treat that as a
+                # hard failure rather than silently overwriting.
+                await self._redis.set(_hash_state(state), "1", ex=ttl_seconds, nx=True)
+            except Exception as exc:  # redis.RedisError, connection errors, ...
+                raise OAuthStateStoreUnavailable() from exc
 
     async def consume(self, state: str) -> bool:
-        try:
-            value = await self._redis.getdel(_hash_state(state))
-        except Exception as exc:
-            raise OAuthStateStoreUnavailable() from exc
-        return value is not None
+        from app.observability import start_span
+
+        with start_span("redis.oauth_state.consume", kind="client"):
+            try:
+                value = await self._redis.getdel(_hash_state(state))
+            except Exception as exc:
+                raise OAuthStateStoreUnavailable() from exc
+            return value is not None
 
 
 class InMemoryOAuthStateStore:

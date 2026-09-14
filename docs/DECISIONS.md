@@ -2,6 +2,58 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-072 — Trace context in Kafka headers only, never the event payload; domain spans at service boundaries, not inside `app/risk/` (2026-09-14)
+
+Phase 15 spec §10 is explicit that W3C trace context must travel in
+Kafka message headers, never inside `EventEnvelope`. `app/events/
+envelope.py`'s field set (`event_id, event_type, event_version,
+occurred_at, correlation_id, project_id, organization_id, payload,
+metadata`) is unchanged — `KafkaEventPublisher.publish` now also passes
+`headers=inject_trace_headers()` to `send_and_wait`, and
+`KafkaEventConsumer._process_one` extracts a parent context from
+`message.headers` before starting its own span. This keeps the mandatory
+Phase 13 regression true by construction, not by discipline: nothing
+about the envelope schema, partition key, or commit logic changed, so
+there's no risk of tracing accidentally coupling to idempotency
+(`tests/test_kafka_trace_regression.py`).
+
+Domain spans (`agentabi.compatibility.analyze`, `agentabi.risk.evaluate`,
+`agentabi.replay.execute`, `agentabi.differential.analyze`,
+`agentabi.github.pr_analysis`) are added by wrapping each service's
+public entrypoint (`run_scan`, `run_assessment`, `execute_replay`,
+`run_analysis`) around a renamed `_*_impl` method, rather than importing
+`app.observability` into `app/risk/`, `app/compatibility/`, `app/
+differential/`, or `app/replay/`'s pure modules. `app/risk/` in
+particular stays exactly as architecturally isolated as `tests/
+test_risk_architectural_invariant.py` already asserts (no SQLAlchemy/
+Pydantic/LLM/OpenTelemetry import anywhere in that package) — spec §15's
+explicit preference.
+
+## ADR-071 — `app.observability` degrades to a true no-op, not a disabled-but-imported SDK, when OpenTelemetry isn't installed or `OTEL_ENABLED=false` (2026-09-14)
+
+Every function in `app/observability/tracing.py` (`start_span`,
+`setup_tracing`, `current_trace_context`, `instrument_*`) checks
+`_otel_available()` (a bare `import opentelemetry.sdk.trace` inside a
+`try/except ImportError`) before touching the SDK, and `setup_tracing`
+additionally short-circuits on `settings.otel_enabled=False` before even
+attempting that import. This means: (1) a process with
+`OTEL_ENABLED=false` (the default) never imports `opentelemetry.*` at
+all, so a missing package is never even a reachable code path — spec
+§5's "must run normally when telemetry is disabled" holds structurally;
+(2) `start_span(...)` always returns a valid context manager yielding
+`None`, so every call site (`app/events/kafka_publisher.py`, every
+service boundary, `app/github/checks_client.py`, etc.) never branches on
+"is tracing on" — the code reads identically whether OTel is installed
+or not; (3) `setup_tracing`/`instrument_fastapi_app`/etc. catch every
+exception from SDK/exporter construction and log-and-continue rather
+than raise, so a collector that's down, a bad `OTEL_EXPORTER_OTLP_
+ENDPOINT`, or a partially-broken install can never fail API startup or
+webhook/Kafka processing — spec §24's "observability must fail open."
+This is the same defensive-import pattern `app/graph/repository.py`
+(`neo4j`) and `app/core/redis.py` (`redis`) already use for dependencies
+this sandbox can't install; `app.observability` applies it uniformly to
+`opentelemetry-*` instead of inventing a separate convention.
+
 ## ADR-070 — Frontend OAuth token handoff: point `github_oauth_redirect_uri` at a frontend-owned callback route, no backend code change (2026-09-14)
 
 `GET /auth/github/callback` (`app/api/v1/auth.py`) returns the AgentABI

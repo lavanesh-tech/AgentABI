@@ -20,6 +20,7 @@ from app.models.compatibility_scan import CompatibilityScan
 from app.models.component import Component
 from app.models.component_version import ComponentVersion
 from app.models.scan_change import ScanChange
+from app.observability import start_span
 from app.repositories.compatibility_scan_repository import CompatibilityScanRepository
 from app.services.component_registry import ComponentRegistryService, Page
 
@@ -45,14 +46,23 @@ class CompatibilityService:
         that doesn't share that guarantee.
         """
 
-        component = await self._registry.get_component(project_id, component_id)
-        baseline = await self._registry.get_component_version(
-            project_id, component_id, baseline_version
-        )
-        candidate = await self._registry.get_component_version(
-            project_id, component_id, candidate_version
-        )
-        return await self._scan_from_versions(project_id, component, baseline, candidate)
+        with start_span(
+            "agentabi.compatibility.analyze",
+            attributes={
+                "agentabi.project_id": str(project_id),
+                "agentabi.component_id": str(component_id),
+                "agentabi.baseline_version": baseline_version,
+                "agentabi.candidate_version": candidate_version,
+            },
+        ):
+            component = await self._registry.get_component(project_id, component_id)
+            baseline = await self._registry.get_component_version(
+                project_id, component_id, baseline_version
+            )
+            candidate = await self._registry.get_component_version(
+                project_id, component_id, candidate_version
+            )
+            return await self._scan_from_versions(project_id, component, baseline, candidate)
 
     async def _scan_from_versions(
         self,
