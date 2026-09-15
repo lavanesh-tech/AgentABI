@@ -13,6 +13,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml ./
 COPY app ./app
+# alembic.ini's script_location=alembic (relative) and prepend_sys_path=.
+# both assume the migration chain sits alongside app/ at this same
+# WORKDIR (/app) — omitting these two made `alembic upgrade head` fail
+# with "No config file 'alembic.ini' found" from inside the container,
+# even though the app/ package (and alembic itself, via pyproject.toml)
+# was already present. Not a startup dependency — nothing here runs
+# migrations automatically — just what `docker compose exec api alembic
+# upgrade head` needs to find on disk.
+COPY alembic.ini ./
+COPY alembic ./alembic
 
 RUN pip install --no-cache-dir .
 
