@@ -2,6 +2,41 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-076 — Switch local Kafka image from `bitnami/kafka` to `apache/kafka` (supersedes ADR-001) (2026-09-15)
+
+Real local Docker verification found `bitnami/kafka:3.8` unresolvable
+(`failed to resolve reference "docker.io/bitnami/kafka:3.8": not
+found`) — Broadcom's 2025 retention-policy change removed free/legacy
+Bitnami tags from Docker Hub, so a previously-valid pinned tag stopped
+existing. Rather than chase another Bitnami tag likely to face the same
+fate, `docker-compose.yml`'s `kafka` service now uses `apache/kafka:
+3.8.0` — the official image published by the Apache Kafka project
+itself, with native KRaft support since 3.7 and no separate Zookeeper
+container, same as ADR-001's original choice.
+
+The only required change is the environment-variable prefix: Bitnami's
+scripts read `KAFKA_CFG_*`; the Apache image's entrypoint reads plain
+`KAFKA_*` (mapped directly to `server.properties` keys — `KAFKA_NODE_ID`
+-> `node.id`, `KAFKA_LISTENERS` -> `listeners`, etc.), so every setting
+carries over one-for-one with the same values (single node, KRaft
+`broker,controller` combined role, `PLAINTEXT://kafka:9092` advertised
+listener, `CONTROLLER://:9093` on the controller listener,
+`api`/`worker`'s `KAFKA_BOOTSTRAP_SERVERS=kafka:9092` untouched). Three
+single-node replication-factor settings (`KAFKA_OFFSETS_TOPIC_
+REPLICATION_FACTOR`, `KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR`,
+`KAFKA_TRANSACTION_STATE_LOG_MIN_ISR`, all `1`) are now explicit because
+this image's startup validation is stricter about replication factors
+exceeding the broker count than Bitnami's was — Bitnami's implicit
+single-node defaults happened to already satisfy this, so it was never
+visible before. The data volume mount moved from Bitnami's
+`/bitnami/kafka` to `/var/lib/kafka/data` (set via `KAFKA_LOG_DIRS`),
+the image's own convention; the `kafka_data` named volume itself is
+unchanged. Topics (`agentabi.analysis.requests/.results/.dlq`), the
+two-topic-plus-DLQ strategy (ADR-067), partition-key behavior
+(ADR-066), retry/DLQ semantics, and at-least-once delivery are all
+application-level and untouched by this image swap — none of them
+depend on which Kafka distribution runs the broker.
+
 ## ADR-075 — Frontend Docker image doesn't copy `public/`; it doesn't exist and nothing references it (2026-09-15)
 
 The Phase 14 `frontend/Dockerfile`'s runner stage unconditionally ran
@@ -186,10 +221,11 @@ collapse to two topics by direction — requests flow one way, results
 resolve_topic`, keyed off `event_type` rather than any per-tenant value.
 A third topic, `agentabi.analysis.dlq`, holds messages that exhausted
 retries or failed permanently (spec §21). Local Kafka relies on the
-Bitnami image's default auto-create-topics behavior (`docker-compose.
-yml`'s `kafka` service does not set `KAFKA_CFG_AUTO_CREATE_TOPICS_
-ENABLE`, so it stays at Kafka's own default of `true`) — explicit
-topic provisioning is deferred to Terraform (a later phase), matching
+broker's default auto-create-topics behavior (`docker-compose.yml`'s
+`kafka` service — `apache/kafka` as of ADR-076, previously `bitnami/
+kafka` — never sets `AUTO_CREATE_TOPICS_ENABLE`, so it stays at Kafka's
+own default of `true`) — explicit topic provisioning is deferred to
+Terraform (a later phase), matching
 spec §33's "do not overengineer production topic provisioning yet."
 
 ## ADR-066 — Partition key `github_repository_id:pull_request_number`; exact-SHA check remains the actual safety mechanism, not partition ordering (2026-09-15)
@@ -1519,6 +1555,10 @@ on `User` — rejected because it silently assumes a user belongs to exactly
 one organization, which contradicts the spec's multi-tenant model.
 
 ## ADR-001 — Kafka in KRaft mode, no Zookeeper (2026-09-13)
+
+*Image choice superseded by ADR-076 (2026-09-15): `bitnami/kafka` became
+unresolvable on Docker Hub; replaced with `apache/kafka`. The KRaft/
+no-Zookeeper decision below is unaffected.*
 
 **Decision:** Use `bitnami/kafka` in KRaft (combined broker+controller) mode
 in `docker-compose.yml`.
