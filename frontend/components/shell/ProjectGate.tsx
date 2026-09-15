@@ -4,7 +4,8 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCurrentProject } from "@/features/projects/useCurrentProject";
-import { EmptyState } from "@/components/ui/primitives";
+import { Button, EmptyState } from "@/components/ui/primitives";
+import { ProjectsIcon } from "@/components/ui/icons";
 
 /** Every flat, project-scoped route (§7: /compatibility, /graph, ...)
  * needs a project in context. `?projectId=` from a link wins; falls
@@ -23,12 +24,16 @@ export function ProjectGate({ children }: { children: (projectId: string) => Rea
   if (!projectId) {
     return (
       <div className="mx-auto max-w-md">
-        <EmptyState message="No project selected." hint="Choose a project to continue." />
-        <div className="text-center">
-          <Link href="/projects" className="text-sm text-accent hover:underline">
-            Go to projects
-          </Link>
-        </div>
+        <EmptyState
+          icon={<ProjectsIcon className="h-8 w-8" />}
+          message="No project selected"
+          hint="Choose a project to see its compatibility, dependency, replay, and risk evidence."
+          action={
+            <Link href="/projects">
+              <Button variant="secondary">Go to projects</Button>
+            </Link>
+          }
+        />
       </div>
     );
   }

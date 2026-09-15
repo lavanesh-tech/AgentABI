@@ -5,9 +5,11 @@ import Link from "next/link";
 import { useCreateProject, useProjects } from "@/features/projects/hooks";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { hasPermission } from "@/lib/permissions";
-import { Button, Card, CardHeader } from "@/components/ui/primitives";
+import { Badge, Button, Card, CardHeader, PageHeader } from "@/components/ui/primitives";
 import { QueryState } from "@/components/ui/QueryState";
 import { friendlyErrorMessage } from "@/lib/api-client";
+import { formatRelative } from "@/lib/format";
+import { ProjectsIcon } from "@/components/ui/icons";
 
 export default function ProjectsPage() {
   const { user } = useAuth();
@@ -18,8 +20,8 @@ export default function ProjectsPage() {
   const canCreate = hasPermission(user?.role ?? null, "project:create");
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <h1 className="text-lg font-semibold text-ink">Projects</h1>
+    <div className="space-y-6">
+      <PageHeader title="Projects" description="Everything AgentABI tracks is scoped to a project." />
 
       {canCreate && (
         <Card>
@@ -37,7 +39,7 @@ export default function ProjectsPage() {
             <label className="flex flex-col gap-1 text-xs text-ink-muted">
               Name
               <input
-                className="rounded border border-border bg-surface px-2 py-1 text-sm text-ink"
+                className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
@@ -46,7 +48,7 @@ export default function ProjectsPage() {
             <label className="flex flex-col gap-1 text-xs text-ink-muted">
               Slug
               <input
-                className="rounded border border-border bg-surface px-2 py-1 text-sm text-ink"
+                className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent"
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
                 required
@@ -56,7 +58,9 @@ export default function ProjectsPage() {
               {createProject.isPending ? "Creating…" : "Create"}
             </Button>
             {createProject.isError && (
-              <p className="w-full text-xs text-block">{friendlyErrorMessage(createProject.error)}</p>
+              <p role="alert" className="w-full text-xs text-block">
+                {friendlyErrorMessage(createProject.error)}
+              </p>
             )}
           </form>
         </Card>
@@ -70,7 +74,8 @@ export default function ProjectsPage() {
           error={projectsQuery.error}
           data={projectsQuery.data}
           isEmpty={(d) => d.items.length === 0}
-          emptyMessage="No projects yet."
+          emptyMessage="No projects yet"
+          emptyHint={canCreate ? "Use the form above to create one." : "Ask an organization admin to create one."}
         >
           {(data) => (
             <ul className="divide-y divide-border">
@@ -78,10 +83,20 @@ export default function ProjectsPage() {
                 <li key={project.id}>
                   <Link
                     href={`/projects/${project.id}`}
-                    className="flex items-center justify-between px-4 py-3 hover:bg-surface-sunken"
+                    className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface-sunken"
                   >
-                    <span className="text-sm font-medium text-ink">{project.name}</span>
-                    <span className="text-xs text-ink-faint">{project.slug}</span>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent">
+                        <ProjectsIcon className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-ink">{project.name}</p>
+                        <Badge>{project.slug}</Badge>
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-xs text-ink-faint">
+                      Updated {formatRelative(project.updated_at)}
+                    </span>
                   </Link>
                 </li>
               ))}

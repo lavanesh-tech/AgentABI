@@ -2,6 +2,26 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-083 — Frontend dark mode: `data-theme` attribute stays the single source of truth; Tailwind's `darkMode` config fixed to match it (2026-09-15)
+
+The frontend UI/UX polish checkpoint added a light/dark/system
+`ThemeToggle`. `globals.css` already themed everything through CSS
+custom properties keyed off a `[data-theme="dark"]` attribute on
+`<html>` (with `@media (prefers-color-scheme: dark)` as the "system"
+fallback when the attribute is absent) — but `tailwind.config.ts` had
+`darkMode: "class"`, which only ever matches a `.dark` class ancestor.
+No code added that class, so any `dark:` Tailwind utility would have
+been silently inert. Rather than introduce a second theming mechanism
+(a class toggle alongside the attribute one), `darkMode` was changed to
+Tailwind 3.4's selector form, `["selector", '[data-theme="dark"]']`, so
+`dark:` utilities key off the exact same attribute the CSS variables
+already use — one source of truth, not two. `ThemeToggle` persists the
+viewer's choice in `localStorage` (a per-viewer UI preference, same
+category as `useCurrentProject`'s selection, not application data) and
+a tiny inline script in the root layout applies it before first paint
+to avoid a theme flash; "system" removes the attribute entirely so the
+existing media-query fallback takes back over.
+
 ## ADR-082 — Grafana dashboard files mount as a sibling path, not nested under the read-only provisioning mount (2026-09-15)
 
 Real local verification: `docker compose up` failed to start Grafana —

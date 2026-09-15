@@ -1,7 +1,11 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  darkMode: "class",
+  // Selector-based dark mode (Tailwind 3.4+): matches the `[data-theme="dark"]`
+  // attribute the ThemeToggle sets on <html>, rather than a `.dark` class.
+  // Previously this was "class", which never matched anything since no code
+  // ever added a `dark` class — any `dark:` utility would have been dead.
+  darkMode: ["selector", '[data-theme="dark"]'],
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./features/**/*.{ts,tsx}"],
   theme: {
     extend: {
