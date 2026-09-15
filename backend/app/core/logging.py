@@ -30,6 +30,15 @@ def _add_trace_context(logger: Any, method_name: str, event_dict: dict[str, Any]
     return event_dict
 
 
+# Third-party loggers that are far more verbose at DEBUG than anyone
+# enabling DEBUG for AgentABI's *own* code actually wants: aiokafka logs
+# a line per broker request/response (fetch, heartbeat, metadata refresh,
+# ...) at DEBUG, which drowns out the app's own structured logs in local
+# dev without indicating any problem — a real aiokafka issue still logs
+# at WARNING or above, which this does not touch.
+_NOISY_DEBUG_LOGGERS: tuple[str, ...] = ("aiokafka",)
+
+
 def configure_logging(settings: Settings) -> None:
     """Configure stdlib logging + structlog once, at process startup."""
 
@@ -38,6 +47,17 @@ def configure_logging(settings: Settings) -> None:
         stream=sys.stdout,
         level=getattr(logging, settings.log_level),
     )
+
+    # `logging.basicConfig`'s `level` sets the *root* logger, so every
+    # library that never calls its own `setLevel()` — aiokafka included —
+    # inherits it too. `LOG_LEVEL=DEBUG` (this project's own local-dev
+    # default) is meant to make AgentABI's code verbose, not third-party
+    # wire-protocol traces; only applied when DEBUG is actually in effect,
+    # so INFO/WARNING/ERROR behavior (where this was never an issue) is
+    # unchanged.
+    if settings.log_level == "DEBUG":
+        for logger_name in _NOISY_DEBUG_LOGGERS:
+            logging.getLogger(logger_name).setLevel(logging.WARNING)
 
     shared_processors: list[Any] = [
         # spec: skip the rest of the chain entirely for a disabled level,

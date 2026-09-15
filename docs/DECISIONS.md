@@ -2,6 +2,48 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-081 — `worker` gets its own compose-level healthcheck; it no longer inherits `api`'s (2026-09-15)
+
+Real local verification: the worker container ran and consumed from
+Kafka correctly (successful fetches, `error_code=0`, successful
+consumer-group heartbeats) but Docker still reported it `unhealthy`
+(`FailingStreak: 283`, `curl: (7) Failed to connect to localhost port
+8000`). `worker` and `api` build from the same Dockerfile/image — Compose
+only overrides `command:` for `worker` (`python -m app.kafka.worker`
+instead of `uvicorn`), not the image's baked-in
+`HEALTHCHECK CMD curl -f http://localhost:8000/api/v1/health`. Without an
+explicit `healthcheck:` override in the `worker` service, that image-level
+check applied verbatim to a process that never starts uvicorn — the
+worker could never pass health regardless of actual liveness.
+
+Fixed by giving `worker:` in `docker-compose.yml` its own `healthcheck:`,
+probing `http://localhost:9101/metrics` — the existing Prometheus metrics
+server (`start_worker_metrics_server`, spec §14) that
+`app.kafka.worker.main()` already starts early, independent of Kafka
+connectivity. This is real process liveness (the worker process is up
+and its own HTTP surface answers), deliberately not Kafka readiness —
+Kafka connectivity/consumer-group health stays governed by Kafka's own
+healthcheck and the consumer's existing retry/DLQ handling, not
+conflated into this probe. `api`'s health behavior is unchanged: it still
+relies solely on the image's Dockerfile `HEALTHCHECK`.
+
+Design rule for any future service added to this shared image: a
+Compose service that overrides `command:` to run something other than
+uvicorn must also declare its own `healthcheck:`, or it silently
+inherits an `api`-shaped one that means nothing for it. Enforced by
+`tests/test_worker_healthcheck.py`.
+
+Also fixed in the same commit: `aiokafka`'s per-request/fetch/heartbeat
+logs at `DEBUG` (this project's local-dev default `LOG_LEVEL`) were
+drowning out AgentABI's own logs. `logging.basicConfig(level=...)` sets
+the *root* logger, so every library without its own explicit level —
+aiokafka included — inherited `DEBUG` too, even though the intent of the
+local-dev default was AgentABI's own code, not third-party wire-protocol
+traces. `app.core.logging.configure_logging` now caps `aiokafka`'s logger
+at `WARNING` specifically when `LOG_LEVEL=DEBUG` is in effect; a real
+aiokafka problem still logs at `WARNING`+, and INFO/WARNING/ERROR
+behavior (where this was never an issue) is unchanged.
+
 ## ADR-080 — every explicitly-created PostgreSQL enum uses `create_type=False` (2026-09-15)
 
 Real local verification: a fresh `alembic upgrade head` failed on 0001
