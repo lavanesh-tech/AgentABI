@@ -40,6 +40,11 @@ def configure_logging(settings: Settings) -> None:
     )
 
     shared_processors: list[Any] = [
+        # spec: skip the rest of the chain entirely for a disabled level,
+        # rather than relying only on the stdlib logger's own filtering
+        # further down — the standard first-processor recipe for a
+        # stdlib-backed pipeline (structlog.stdlib.LoggerFactory below).
+        structlog.stdlib.filter_by_level,
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
@@ -54,11 +59,24 @@ def configure_logging(settings: Settings) -> None:
     else:
         renderer = structlog.dev.ConsoleRenderer()
 
+    # `structlog.stdlib.add_logger_name` (above) reads `logger.name` off
+    # whatever object `logger_factory` hands back, which only a real
+    # stdlib `logging.Logger` has — `structlog.PrintLoggerFactory()`'s
+    # `PrintLogger` doesn't, which is what crashed every log call at
+    # runtime. `get_logger`'s own return-type annotation
+    # (`structlog.stdlib.BoundLogger`) already documented stdlib-backed
+    # logging as the intended architecture, so both the factory and the
+    # wrapper class below are the matching stdlib pair rather than the
+    # PrintLogger-only combination — the fix aligns the runtime
+    # configuration with what the code already declared. Final rendered
+    # events still reach stdout through the stdlib logger's own handler
+    # (from `logging.basicConfig` above), whose `"%(message)s"` format
+    # passes the already-JSON/console-rendered string through unchanged.
     structlog.configure(
         processors=[*shared_processors, renderer],
-        wrapper_class=structlog.make_filtering_bound_logger(getattr(logging, settings.log_level)),
+        wrapper_class=structlog.stdlib.BoundLogger,
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
 
