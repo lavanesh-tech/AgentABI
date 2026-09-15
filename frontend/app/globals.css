@@ -46,7 +46,67 @@
   --block: 248 113 113;
 }
 
+* {
+  border-color: rgb(var(--border));
+}
+
+html {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+  }
+}
+
 body {
   background: rgb(var(--surface-sunken));
   color: rgb(var(--ink));
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgb(var(--accent) / 0.25);
+}
+
+/* Consistent, visible keyboard focus everywhere — status must never be
+   color-only, and interactive elements must never be silently unreachable
+   by keyboard (spec §14). */
+:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Thin, low-contrast scrollbars that still work in both themes. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--ink-faint)) transparent;
+}
+
+/* React Flow (Dependency Graph) ships its own light-only chrome for the
+   controls panel and edge labels — theme those to the app's tokens so
+   dark mode doesn't show a stray white control box. */
+.react-flow__controls-button {
+  background: rgb(var(--surface-raised));
+  border-bottom: 1px solid rgb(var(--border));
+  fill: rgb(var(--ink));
+}
+.react-flow__controls-button:hover {
+  background: rgb(var(--surface-sunken));
+}
+.react-flow__edge-text {
+  fill: rgb(var(--ink-muted));
+}
+.react-flow__edge-textbg {
+  fill: rgb(var(--surface));
+}
+.react-flow__attribution {
+  background: transparent;
 }

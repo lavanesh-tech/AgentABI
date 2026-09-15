@@ -5,9 +5,13 @@ import { useParams } from "next/navigation";
 import { useComponents, useComponentVersions, useCreateComponent } from "@/features/components/hooks";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { hasPermission } from "@/lib/permissions";
-import { Badge, Button, Card, CardHeader } from "@/components/ui/primitives";
+import { Badge, Button, Card, CardHeader, PageHeader } from "@/components/ui/primitives";
 import { QueryState } from "@/components/ui/QueryState";
 import { formatDateTime } from "@/lib/format";
+import { ComponentsIcon } from "@/components/ui/icons";
+
+const inputClass =
+  "rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent";
 
 export default function ComponentsPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -21,8 +25,8 @@ export default function ComponentsPage() {
   const versionsQuery = useComponentVersions(projectId, selectedId ?? undefined);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <h1 className="text-lg font-semibold text-ink">Components</h1>
+    <div className="space-y-6">
+      <PageHeader title="Components" description="The registry of agent-system components AgentABI tracks for this project." />
 
       {canWrite && (
         <Card>
@@ -37,7 +41,7 @@ export default function ComponentsPage() {
             <label className="flex flex-col gap-1 text-xs text-ink-muted">
               Name
               <input
-                className="rounded border border-border bg-surface px-2 py-1 text-sm text-ink"
+                className={inputClass}
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 required
@@ -46,7 +50,7 @@ export default function ComponentsPage() {
             <label className="flex flex-col gap-1 text-xs text-ink-muted">
               Slug
               <input
-                className="rounded border border-border bg-surface px-2 py-1 text-sm text-ink"
+                className={inputClass}
                 value={form.slug}
                 onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value }))}
                 required
@@ -55,7 +59,7 @@ export default function ComponentsPage() {
             <label className="flex flex-col gap-1 text-xs text-ink-muted">
               Type
               <input
-                className="rounded border border-border bg-surface px-2 py-1 text-sm text-ink"
+                className={inputClass}
                 value={form.component_type}
                 onChange={(e) => setForm((f) => ({ ...f, component_type: e.target.value }))}
                 required
@@ -77,7 +81,8 @@ export default function ComponentsPage() {
             error={componentsQuery.error}
             data={componentsQuery.data}
             isEmpty={(d) => d.items.length === 0}
-            emptyMessage="No components registered yet."
+            emptyMessage="No components registered yet"
+            emptyHint={canWrite ? "Register one above to start tracking versions." : "Ask a project member to register one."}
           >
             {(data) => (
               <ul className="divide-y divide-border">
@@ -86,11 +91,13 @@ export default function ComponentsPage() {
                     <button
                       type="button"
                       onClick={() => setSelectedId(c.id)}
-                      className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm hover:bg-surface-sunken ${selectedId === c.id ? "bg-accent/5" : ""}`}
+                      aria-current={selectedId === c.id}
+                      className={`flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm transition-colors hover:bg-surface-sunken ${selectedId === c.id ? "bg-accent/5" : ""}`}
                     >
-                      <span>
-                        <span className="font-medium text-ink">{c.name}</span>{" "}
-                        <span className="text-xs text-ink-faint">{c.component_type}</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <ComponentsIcon className="h-3.5 w-3.5 shrink-0 text-ink-faint" />
+                        <span className="truncate font-medium text-ink">{c.name}</span>
+                        <span className="shrink-0 text-xs text-ink-faint">{c.component_type}</span>
                       </span>
                       <Badge tone={c.status === "active" ? "pass" : "neutral"}>{c.status}</Badge>
                     </button>
@@ -110,7 +117,7 @@ export default function ComponentsPage() {
               error={versionsQuery.error}
               data={versionsQuery.data}
               isEmpty={(d) => d.items.length === 0}
-              emptyMessage="No versions registered yet."
+              emptyMessage="No versions registered yet"
             >
               {(data) => (
                 <ul className="divide-y divide-border">

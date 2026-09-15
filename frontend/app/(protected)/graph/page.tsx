@@ -4,9 +4,10 @@ import { Suspense, useState } from "react";
 import { ProjectGate } from "@/components/shell/ProjectGate";
 import { useComponents } from "@/features/components/hooks";
 import { useBlastRadius, useDependents } from "@/features/graph/hooks";
-import { Card, CardHeader } from "@/components/ui/primitives";
+import { Card, CardHeader, PageHeader, StatTile } from "@/components/ui/primitives";
 import { QueryState } from "@/components/ui/QueryState";
 import { DependencyGraph } from "@/components/graph/DependencyGraph";
+import { GraphIcon } from "@/components/ui/icons";
 
 function GraphInner({ projectId }: { projectId: string }) {
   const componentsQuery = useComponents(projectId);
@@ -15,8 +16,11 @@ function GraphInner({ projectId }: { projectId: string }) {
   const blastRadiusQuery = useBlastRadius(projectId, componentId ?? undefined);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <h1 className="text-lg font-semibold text-ink">Dependency Graph</h1>
+    <div className="space-y-6">
+      <PageHeader
+        title="Dependency Graph"
+        description="Real dependency relationships from the graph service — never a fabricated layout."
+      />
 
       <Card>
         <CardHeader
@@ -31,7 +35,8 @@ function GraphInner({ projectId }: { projectId: string }) {
             >
               {(data) => (
                 <select
-                  className="rounded border border-border bg-surface px-2 py-1 text-sm text-ink"
+                  aria-label="Component"
+                  className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent"
                   value={componentId ?? ""}
                   onChange={(e) => setComponentId(e.target.value || null)}
                 >
@@ -47,7 +52,11 @@ function GraphInner({ projectId }: { projectId: string }) {
           }
         />
         {!componentId ? (
-          <p className="p-4 text-sm text-ink-muted">Select a component to view its dependency graph.</p>
+          <div className="flex flex-col items-center justify-center gap-1 px-6 py-16 text-center">
+            <GraphIcon className="mb-1 h-8 w-8 text-ink-faint" />
+            <p className="text-sm font-medium text-ink-muted">Select a component</p>
+            <p className="text-xs text-ink-faint">Its dependency graph and blast radius will appear here.</p>
+          </div>
         ) : (
           <QueryState
             isLoading={dependentsQuery.isLoading}
@@ -55,7 +64,8 @@ function GraphInner({ projectId }: { projectId: string }) {
             error={dependentsQuery.error}
             data={dependentsQuery.data}
             isEmpty={(d) => d.length === 0}
-            emptyMessage="No dependents recorded in the graph for this component."
+            emptyMessage="No dependents recorded in the graph for this component"
+            emptyHint="This component has no tracked dependents yet."
           >
             {(dependents) => (
               <div className="p-4">
@@ -84,19 +94,10 @@ function GraphInner({ projectId }: { projectId: string }) {
             emptyMessage="No blast radius evidence available."
           >
             {(br) => (
-              <div className="grid grid-cols-3 gap-4 p-4 text-center">
-                <div>
-                  <p className="text-2xl font-bold text-ink">{br.total_affected}</p>
-                  <p className="text-xs text-ink-faint">Total affected</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-warn">{br.direct_dependents.length}</p>
-                  <p className="text-xs text-ink-faint">Direct</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-accent">{br.transitive_dependents.length}</p>
-                  <p className="text-xs text-ink-faint">Transitive</p>
-                </div>
+              <div className="grid grid-cols-3 gap-3 p-4">
+                <StatTile label="Total affected" value={br.total_affected} />
+                <StatTile label="Direct" value={br.direct_dependents.length} tone="warn" />
+                <StatTile label="Transitive" value={br.transitive_dependents.length} tone="accent" />
               </div>
             )}
           </QueryState>

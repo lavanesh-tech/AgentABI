@@ -68,12 +68,22 @@ export function DependencyGraph({
     return { nodes: nodeList, edges: edgeList };
   }, [centerComponentId, centerLabel, dependents, blastRadius]);
 
+  if (nodes.length === 0) {
+    return (
+      <div className="flex h-[420px] w-full items-center justify-center rounded-md border border-border bg-surface text-sm text-ink-muted">
+        No graph data to display.
+      </div>
+    );
+  }
+
   return (
-    <div className="h-[520px] w-full rounded-md border border-border bg-surface">
-      <ReactFlow nodes={nodes} edges={edges} fitView proOptions={{ hideAttribution: true }}>
-        <Background gap={16} size={1} />
-        <Controls showInteractive={false} />
-      </ReactFlow>
+    <div className="w-full overflow-hidden rounded-md border border-border bg-surface">
+      <div className="h-[420px] w-full sm:h-[520px]">
+        <ReactFlow nodes={nodes} edges={edges} fitView proOptions={{ hideAttribution: true }}>
+          <Background gap={16} size={1} color="rgb(var(--border))" />
+          <Controls showInteractive={false} />
+        </ReactFlow>
+      </div>
       <Legend />
     </div>
   );
@@ -85,7 +95,11 @@ function nodeStyle(tier: ImpactTier) {
     borderRadius: 6,
     padding: 8,
     fontSize: 12,
-    background: "white",
+    // References the theme's own surface-raised token (a valid plain CSS
+    // color) instead of a hardcoded "white" — the prior hardcoded value
+    // rendered as a jarring white box in dark mode.
+    background: "rgb(var(--surface-raised))",
+    color: "rgb(var(--ink))",
   };
 }
 

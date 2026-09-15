@@ -1,12 +1,13 @@
 "use client";
 
 import { Suspense, useState } from "react";
+import clsx from "clsx";
 import { ProjectGate } from "@/components/shell/ProjectGate";
 import { useDifferentialReport, useDifferentialReports } from "@/features/differential/hooks";
-import { Card, CardHeader } from "@/components/ui/primitives";
+import { Card, CardHeader, PageHeader, StatTile } from "@/components/ui/primitives";
 import { QueryState } from "@/components/ui/QueryState";
 import { StructuredDiffTable, type StructuredDiffRow } from "@/components/diff/StructuredDiffTable";
-import { formatDateTime } from "@/lib/format";
+import { formatRelative } from "@/lib/format";
 
 function DifferentialInner({ projectId }: { projectId: string }) {
   const reportsQuery = useDifferentialReports(projectId);
@@ -14,15 +15,13 @@ function DifferentialInner({ projectId }: { projectId: string }) {
   const reportQuery = useDifferentialReport(projectId, selectedId ?? undefined);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold text-ink">Differential Analysis</h1>
-        <p className="text-xs text-ink-faint">
-          Deterministic step alignment (Phase 10 analyzer) — never LLM/fuzzy alignment.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Differential Analysis"
+        description="Deterministic step alignment between a baseline and candidate replay — never LLM/fuzzy alignment."
+      />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_1fr]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[300px_1fr]">
         <Card>
           <CardHeader title="Reports" />
           <QueryState
@@ -31,21 +30,29 @@ function DifferentialInner({ projectId }: { projectId: string }) {
             error={reportsQuery.error}
             data={reportsQuery.data}
             isEmpty={(d) => d.items.length === 0}
-            emptyMessage="No differential reports yet."
+            emptyMessage="No differential reports yet"
+            emptyHint="Reports appear once a baseline and candidate replay are compared."
           >
             {(data) => (
-              <ul className="max-h-[600px] divide-y divide-border overflow-y-auto">
+              <ul className="max-h-[640px] divide-y divide-border overflow-y-auto">
                 {data.items.map((r) => (
                   <li key={r.id}>
                     <button
                       type="button"
                       onClick={() => setSelectedId(r.id)}
-                      className={`block w-full px-4 py-3 text-left hover:bg-surface-sunken ${selectedId === r.id ? "bg-accent/5" : ""}`}
+                      aria-current={selectedId === r.id}
+                      className={clsx(
+                        "block w-full px-4 py-3 text-left transition-colors hover:bg-surface-sunken",
+                        selectedId === r.id && "bg-accent/5",
+                      )}
                     >
                       <p className="text-xs text-ink-muted">
-                        {r.summary.changed_steps} changed, {r.summary.new_failures} new failures
+                        {r.summary.changed_steps} changed
+                        {r.summary.new_failures > 0 && (
+                          <span className="font-medium text-block"> · {r.summary.new_failures} new failures</span>
+                        )}
                       </p>
-                      <p className="text-xs text-ink-faint">{formatDateTime(r.created_at)}</p>
+                      <p className="mt-0.5 text-xs text-ink-faint">{formatRelative(r.created_at)}</p>
                     </button>
                   </li>
                 ))}
@@ -54,10 +61,14 @@ function DifferentialInner({ projectId }: { projectId: string }) {
           </QueryState>
         </Card>
 
-        <Card>
-          <CardHeader title="Report detail" subtitle={selectedId ? undefined : "Select a report"} />
+        <div className="min-w-0">
           {!selectedId ? (
-            <p className="p-4 text-sm text-ink-muted">Select a differential report from the list.</p>
+            <Card>
+              <div className="flex flex-col items-center justify-center gap-1 px-6 py-20 text-center">
+                <p className="text-sm font-medium text-ink-muted">Select a report</p>
+                <p className="text-xs text-ink-faint">Baseline vs. candidate differences will appear here.</p>
+              </div>
+            </Card>
           ) : (
             <QueryState
               isLoading={reportQuery.isLoading}
@@ -81,30 +92,27 @@ function DifferentialInner({ projectId }: { projectId: string }) {
                   evidence: { output_differences: c.output_differences, error_difference: c.error_difference },
                 }));
                 return (
-                  <div>
-                    <div className="grid grid-cols-4 gap-2 border-b border-border px-4 py-3 text-center text-xs">
-                      <Stat label="Matched" value={report.summary.matched_steps} />
-                      <Stat label="Added" value={report.summary.added_steps} />
-                      <Stat label="Removed" value={report.summary.removed_steps} />
-                      <Stat label="New failures" value={report.summary.new_failures} tone="block" />
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      <StatTile label="Matched" value={report.summary.matched_steps} />
+                      <StatTile label="Added" value={report.summary.added_steps} tone="accent" />
+                      <StatTile label="Removed" value={report.summary.removed_steps} tone="warn" />
+                      <StatTile label="New failures" value={report.summary.new_failures} tone="block" />
                     </div>
-                    <StructuredDiffTable rows={rows} />
+                    <Card>
+                      <CardHeader
+                        title="Aligned steps"
+                        subtitle={`Analyzer ${report.analyzer_version}`}
+                      />
+                      <StructuredDiffTable rows={rows} />
+                    </Card>
                   </div>
                 );
               }}
             </QueryState>
           )}
-        </Card>
+        </div>
       </div>
-    </div>
-  );
-}
-
-function Stat({ label, value, tone }: { label: string; value: number; tone?: "block" }) {
-  return (
-    <div>
-      <p className={`text-lg font-bold ${tone === "block" ? "text-block" : "text-ink"}`}>{value}</p>
-      <p className="text-ink-faint">{label}</p>
     </div>
   );
 }
