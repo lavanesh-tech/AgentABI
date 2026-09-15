@@ -2,6 +2,23 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-075 — Frontend Docker image doesn't copy `public/`; it doesn't exist and nothing references it (2026-09-15)
+
+The Phase 14 `frontend/Dockerfile`'s runner stage unconditionally ran
+`COPY --from=builder /app/public ./public`, which fails the build
+outright (`"/app/public": not found`) the moment there is no
+`public/` directory — confirmed true for this app: no static assets, no
+`next/image`/`<Image>` usage, no favicon, nothing under `app/` or
+`components/` references a `/`-rooted public URL. Rather than adding a
+placeholder file just to satisfy the COPY (which would ship a fake
+asset for no functional reason and quietly mask a real missing-file bug
+if `public/` is ever meant to exist), the COPY is removed outright. The
+rest of the runner stage — full `.next` (non-standalone), full
+`node_modules`, `package.json`, `npm run start` — was already
+internally consistent with `next.config.mjs` having no
+`output: 'standalone'`, so this was the only packaging break. Add the
+`public/` COPY back if a real `public/` directory is introduced later.
+
 ## ADR-074 — Cardinality safety enforced at metric-registration time, not just by convention (2026-09-15)
 
 Phase 16 spec §22 lists exact label names that must never appear on any

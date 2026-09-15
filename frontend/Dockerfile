@@ -19,7 +19,10 @@ FROM node:22-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
-COPY --from=builder /app/public ./public
+# No `public/` directory exists in this app (no static assets, no
+# next/image usage, no favicon) — see docs/DECISIONS.md. Copying it
+# unconditionally broke the build the moment that stayed true; add the
+# COPY back if/when a real public/ directory is introduced.
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
