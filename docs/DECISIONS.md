@@ -2,6 +2,24 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-079 — API image packages `alembic.ini`/`alembic/` alongside `app/` (2026-09-15)
+
+Real local verification: `docker compose exec api alembic upgrade head`
+failed with `FAILED: No config file 'alembic.ini' found, or file has no
+'[alembic]' section`, so PostgreSQL had no schema and GitHub OAuth's
+user lookup hit `UndefinedTableError: relation "users" does not exist`.
+`alembic` was already a `pyproject.toml` dependency and installed in the
+image, but the Dockerfile's `COPY` list only ever named `pyproject.toml`
+and `app/` — `alembic.ini` (whose `script_location = alembic` and
+`prepend_sys_path = .` both assume the migration chain sits alongside
+`app/` at the image's `WORKDIR`) and the `alembic/` directory itself were
+never in the image at all. Fixed by adding `COPY alembic.ini ./` and
+`COPY alembic ./alembic` next to the existing `COPY app ./app`. No
+automatic migration-on-startup was added — the architecture's existing
+intent is an explicit operator-run `alembic upgrade head`, and this fix
+only makes that command capable of finding its own configuration; it
+changes nothing about when or whether migrations run.
+
 ## ADR-078 — structlog runs the full stdlib-backed pipeline, not `PrintLoggerFactory` (2026-09-15)
 
 Real Docker verification found both the API and worker crashing on their
