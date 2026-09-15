@@ -78,7 +78,13 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      # `apache/kafka`'s image doesn't put $KAFKA_HOME/bin on PATH the way
+      # Bitnami's did — the bare `kafka-topics.sh` from the prior fix
+      # resolved to "not found" (confirmed on real Mac Docker: exit 127).
+      # The absolute path under $KAFKA_HOME still does a real broker
+      # metadata request against the internal listener (not just a
+      # process-exists check), so this stays a genuine liveness probe.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
       interval: 10s
       timeout: 10s
       retries: 10
