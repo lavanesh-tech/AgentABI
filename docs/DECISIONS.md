@@ -2,6 +2,35 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-078 — structlog runs the full stdlib-backed pipeline, not `PrintLoggerFactory` (2026-09-15)
+
+Real Docker verification found both the API and worker crashing on their
+first log call: `structlog.stdlib.add_logger_name` reads `logger.name`,
+but `app.core.logging.configure_logging` paired it with `logger_factory=
+structlog.PrintLoggerFactory()` — `PrintLogger` has no `.name` attribute,
+so `AttributeError: 'PrintLogger' object has no attribute 'name'` fired
+on every single log line (API's `logger.info("startup", ...)`; worker's
+`start_worker_metrics_server`'s `logger.info(...)`, and then its own
+`except` block's `logger.warning(...)` failed the same way).
+
+`get_logger`'s own return-type annotation was already `structlog.stdlib.
+BoundLogger`, and `logging.basicConfig(...)` was already being called —
+both signal the intended architecture was full stdlib-backed logging,
+not `PrintLoggerFactory`'s bypass-stdlib-entirely mode; `PrintLoggerFactory`
+was simply the wrong factory for a pipeline built around `structlog.
+stdlib.*` processors. Fixed by switching to the matching stdlib pair:
+`logger_factory=structlog.stdlib.LoggerFactory()` (real `logging.Logger`
+instances, so `.name` exists) and `wrapper_class=structlog.stdlib.
+BoundLogger` (replacing `make_filtering_bound_logger`, which is the
+correct pairing for `PrintLoggerFactory`, not this one). Added
+`structlog.stdlib.filter_by_level` as the first processor — the standard
+recipe for this pairing, so disabled-level events skip the rest of the
+chain instead of relying solely on the stdlib logger's own filtering
+further down. JSON/console rendering, correlation IDs, Phase 15 trace/span
+enrichment, and log levels are all unchanged — the renderer still produces
+the final string, which the stdlib logger's handler (`"%(message)s"`
+format, from the existing `logging.basicConfig`) writes through as-is.
+
 ## ADR-077 — `apache/kafka` healthcheck needs the absolute script path; it isn't on PATH (2026-09-15)
 
 Real Docker verification of ADR-076's `apache/kafka:3.8.0` switch found
