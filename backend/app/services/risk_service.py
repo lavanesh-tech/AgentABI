@@ -10,12 +10,14 @@ or anything OpenAI-shaped — see `tests/test_risk_architectural_
 invariant.py`.
 """
 
+import time
 import uuid
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.compatibility.models import Severity
+from app.core.config import get_settings
 from app.differential.models import DifferenceType
 from app.domain.checksums import compute_checksum
 from app.domain.exceptions import (
@@ -31,7 +33,7 @@ from app.models.compatibility_scan import CompatibilityScan
 from app.models.differential_report import DifferentialReportRecord
 from app.models.risk_assessment import RiskAssessmentRecord
 from app.models.risk_rule_result import RiskRuleResultRecord
-from app.observability import start_span
+from app.observability import record_analysis_run, record_risk_decision, start_span
 from app.repositories.compatibility_scan_repository import CompatibilityScanRepository
 from app.repositories.differential_repository import DifferentialRepository
 from app.repositories.project_repository import ProjectRepository
@@ -78,6 +80,9 @@ class RiskService:
         `_run_assessment_impl` at the service boundary rather than
         importing OpenTelemetry into `app/risk/`'s pure engine."""
 
+        settings = get_settings()
+        start = time.monotonic()
+        status = "success"
         with start_span(
             "agentabi.risk.evaluate",
             attributes={
@@ -90,14 +95,34 @@ class RiskService:
                 else None,
             },
         ) as span:
-            record = await self._run_assessment_impl(
-                project_id,
-                compatibility_scan_id=compatibility_scan_id,
-                differential_report_id=differential_report_id,
-            )
+            try:
+                record = await self._run_assessment_impl(
+                    project_id,
+                    compatibility_scan_id=compatibility_scan_id,
+                    differential_report_id=differential_report_id,
+                )
+            except Exception:
+                status = "failure"
+                raise
+            finally:
+                record_analysis_run(
+                    settings,
+                    pipeline="risk",
+                    status=status,
+                    duration_seconds=time.monotonic() - start,
+                )
             if span is not None:
                 span.set_attribute("agentabi.risk_decision", record.decision)
                 span.set_attribute("agentabi.risk_score", record.score)
+            # Mandatory (spec §8/§38): observed exactly as produced by
+            # app.risk.engine.evaluate() via _run_assessment_impl above —
+            # never recalculated or re-derived here.
+            record_risk_decision(
+                settings,
+                decision=record.decision,
+                hard_block=record.hard_block,
+                score=record.score,
+            )
             return record
 
     async def _run_assessment_impl(

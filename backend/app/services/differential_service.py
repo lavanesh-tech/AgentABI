@@ -4,11 +4,13 @@ pure `app.differential.analyzer`, persists the result, and returns it
 persisted; the analyzer itself never touches the database.
 """
 
+import time
 import uuid
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.differential.analyzer import ANALYZER_VERSION, analyze
 from app.differential.models import DifferentialReport as PureDifferentialReport
 from app.differential.models import ReplayStepView
@@ -22,7 +24,7 @@ from app.models.differential_change import DifferentialChangeRecord
 from app.models.differential_report import DifferentialReportRecord
 from app.models.replay_run import ReplayRun
 from app.models.replay_step import ReplayStep
-from app.observability import start_span
+from app.observability import record_analysis_run, start_span
 from app.replay.models import ReplayStatus
 from app.repositories.differential_repository import DifferentialRepository
 from app.repositories.replay_repository import ReplayRepository
@@ -52,6 +54,8 @@ class DifferentialService:
     ) -> DifferentialReportRecord:
         """Phase 15 spec §14 domain span boundary."""
 
+        start = time.monotonic()
+        status = "success"
         with start_span(
             "agentabi.differential.analyze",
             attributes={
@@ -60,12 +64,23 @@ class DifferentialService:
                 "agentabi.candidate_replay_id": str(candidate_replay_id),
             },
         ):
-            return await self._run_analysis_impl(
-                project_id,
-                baseline_replay_id=baseline_replay_id,
-                candidate_replay_id=candidate_replay_id,
-                compatibility_scan_id=compatibility_scan_id,
-            )
+            try:
+                return await self._run_analysis_impl(
+                    project_id,
+                    baseline_replay_id=baseline_replay_id,
+                    candidate_replay_id=candidate_replay_id,
+                    compatibility_scan_id=compatibility_scan_id,
+                )
+            except Exception:
+                status = "failure"
+                raise
+            finally:
+                record_analysis_run(
+                    get_settings(),
+                    pipeline="differential",
+                    status=status,
+                    duration_seconds=time.monotonic() - start,
+                )
 
     async def _run_analysis_impl(
         self,

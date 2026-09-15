@@ -51,6 +51,19 @@ it locally: `docker compose up -d otel-collector`, set
 `OTEL_ENABLED=true` for the API/worker, and watch collector stdout for
 spans. See docs/ARCHITECTURE.md's Phase 15 section.
 
+## Metrics
+
+Prometheus metrics are on by default (`METRICS_ENABLED=true`), exposed
+at `GET /metrics` (no AgentABI JWT — meant for a local/internal-network
+scraper; see docs/ARCHITECTURE.md's Phase 16 section for the documented
+security boundary). Separate from tracing: `prometheus_client` owns
+metrics directly, never through OpenTelemetry (ADR-073). Run `docker
+compose up -d prometheus grafana` to try it locally — Prometheus at
+`http://localhost:9090` (targets: `api:8000`, `worker:9101`), Grafana at
+`http://localhost:3001` (`admin` / `GRAFANA_ADMIN_PASSWORD`, default a
+local-only placeholder) with the "AgentABI — System Overview" dashboard
+auto-provisioned.
+
 ## Security & API
 
 Access to non-public APIs requires an AgentABI JWT obtained via GitHub

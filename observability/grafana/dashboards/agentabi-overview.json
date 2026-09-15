@@ -1,0 +1,206 @@
+{
+  "title": "AgentABI — System Overview",
+  "uid": "agentabi-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "tags": ["agentabi", "phase-16"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP request rate",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_http_requests_total[5m])) by (route)",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "HTTP error rate (5xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_http_requests_total{status=~\"5..\"}[5m])) / sum(rate(agentabi_http_requests_total[5m]))",
+          "legendFormat": "error ratio"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "HTTP p95 latency",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 0 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(agentabi_http_request_duration_seconds_bucket[5m])) by (le, route))",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Analysis pipeline throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 7 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_analysis_runs_total[5m])) by (pipeline, status)",
+          "legendFormat": "{{pipeline}} / {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Analysis pipeline p95 duration",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 7 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(agentabi_analysis_duration_seconds_bucket[5m])) by (le, pipeline))",
+          "legendFormat": "{{pipeline}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Risk decisions (PASS / WARN / BLOCK)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 7 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_risk_decisions_total[15m])) by (decision)",
+          "legendFormat": "{{decision}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Risk score distribution",
+      "type": "heatmap",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 14 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_risk_score_bucket[15m])) by (le)",
+          "format": "heatmap",
+          "legendFormat": "{{le}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Hard-block count",
+      "type": "stat",
+      "gridPos": { "h": 7, "w": 4, "x": 8, "y": 14 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(increase(agentabi_risk_decisions_total{hard_block=\"true\"}[24h]))"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Kafka publish/consume throughput",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 12, "y": 14 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_kafka_published_total[5m])) by (event_type, outcome)",
+          "legendFormat": "published {{event_type}}/{{outcome}}"
+        },
+        {
+          "expr": "sum(rate(agentabi_kafka_consumed_total[5m])) by (event_type, outcome)",
+          "legendFormat": "consumed {{event_type}}/{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Kafka retries & DLQ",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 21 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_kafka_retries_total[5m])) by (event_type)",
+          "legendFormat": "retries {{event_type}}"
+        },
+        {
+          "expr": "sum(rate(agentabi_kafka_dlq_total[5m])) by (event_type, reason)",
+          "legendFormat": "dlq {{event_type}}/{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "GitHub PR analysis outcomes",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 21 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_github_pr_analyses_total[15m])) by (outcome)",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "GitHub check publish failures",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 28 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_github_check_publish_total{outcome=\"failure\"}[15m])) by (action)",
+          "legendFormat": "{{action}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "OpenAI explanation latency & failures",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 28 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(agentabi_openai_explanation_duration_seconds_bucket[15m])) by (le))",
+          "legendFormat": "p95 duration"
+        },
+        {
+          "expr": "sum(rate(agentabi_openai_explanations_total{outcome=\"failure\"}[15m]))",
+          "legendFormat": "failure rate"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Errors by category",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 35 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(agentabi_errors_total[15m])) by (error_type)",
+          "legendFormat": "{{error_type}}"
+        }
+      ]
+    }
+  ]
+}

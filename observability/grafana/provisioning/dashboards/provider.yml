@@ -1,0 +1,13 @@
+# Phase 16 — auto-loads every dashboard JSON file under
+# observability/grafana/dashboards/ at Grafana startup (spec §29/§30).
+apiVersion: 1
+
+providers:
+  - name: AgentABI
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/files

@@ -18,7 +18,7 @@ from app.events.envelope import EventEnvelope, deserialize_envelope
 from app.github.checks_client import HttpxGitHubChecksClient, StaticGitHubCredentialProvider
 from app.kafka.analysis_handler import AnalysisRequestHandler
 from app.kafka.consumer import KafkaEventConsumer
-from app.observability import setup_tracing, shutdown_tracing
+from app.observability import setup_tracing, shutdown_tracing, start_worker_metrics_server
 
 logger = structlog.get_logger(__name__)
 
@@ -67,6 +67,10 @@ async def main() -> None:
     # resource attributes, different `service.name` so API and worker
     # traces are distinguishable in a backend.
     setup_tracing(settings.model_copy(update={"otel_service_name": "agentabi-worker"}))
+    # Phase 16 spec §14: the worker isn't a FastAPI process, so metrics
+    # are served on their own small port rather than piggybacking on the
+    # API's `/metrics` route.
+    start_worker_metrics_server(settings)
     logger.info("kafka_worker_starting", group=settings.kafka_consumer_group)
 
     session_factory = get_session_factory()

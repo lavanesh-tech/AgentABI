@@ -17,6 +17,7 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, ConfigDict
 
+from app.core.config import get_settings
 from app.domain.exceptions import (
     LLMExplanationFailed,
     LLMInvalidResponse,
@@ -26,7 +27,7 @@ from app.domain.exceptions import (
 )
 from app.llm.models import EvidenceReference, ExplanationRequest, ExplanationResponse
 from app.llm.prompts import EXPLANATION_SYSTEM_PROMPT
-from app.observability import start_span
+from app.observability import record_openai_explanation, start_span
 
 PROVIDER_NAME = "openai"
 
@@ -78,12 +79,26 @@ class OpenAIProvider:
         """Phase 15 spec §21 provider-boundary span. Never carries the
         API key, prompt, or response — only provider/model/outcome."""
 
+        settings = get_settings()
+        start = time.monotonic()
+        outcome = "success"
         with start_span(
             "agentabi.openai.explain",
             kind="client",
             attributes={"agentabi.provider": PROVIDER_NAME, "agentabi.model": self._model},
         ):
-            return await self._explain_impl(request)
+            try:
+                return await self._explain_impl(request)
+            except Exception:
+                outcome = "failure"
+                raise
+            finally:
+                record_openai_explanation(
+                    settings,
+                    outcome=outcome,
+                    model=self._model,
+                    duration_seconds=time.monotonic() - start,
+                )
 
     async def _explain_impl(self, request: ExplanationRequest) -> ExplanationResponse:
         if not self._api_key:

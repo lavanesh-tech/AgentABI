@@ -42,6 +42,7 @@ from app.events.analysis_events import build_analysis_requested_event
 from app.events.factory import get_event_publisher
 from app.github.checks_client import HttpxGitHubChecksClient, StaticGitHubCredentialProvider
 from app.github.pr_webhook_models import parse_pull_request_event
+from app.observability import record_github_webhook_delivery
 from app.services.audit_service import AuditService
 from app.services.github_pr_analysis_service import GitHubPullRequestAnalysisService
 from app.services.webhook_service import GitHubWebhookService
@@ -93,14 +94,24 @@ async def github_webhook(
     raw_body = await request.body()
     request_id = getattr(request.state, "correlation_id", None)
 
+    event_header = request.headers.get("X-GitHub-Event") or "unknown"
     service = GitHubWebhookService(session, settings=settings)
-    result = await service.process(
-        raw_body=raw_body,
-        signature_header=request.headers.get("X-Hub-Signature-256"),
-        delivery_id=request.headers.get("X-GitHub-Delivery"),
-        event_type=request.headers.get("X-GitHub-Event"),
-        request_id=request_id,
-    )
+    try:
+        result = await service.process(
+            raw_body=raw_body,
+            signature_header=request.headers.get("X-Hub-Signature-256"),
+            delivery_id=request.headers.get("X-GitHub-Delivery"),
+            event_type=request.headers.get("X-GitHub-Event"),
+            request_id=request_id,
+        )
+    except AgentABIError:
+        # Spec §16: a rejected delivery (bad signature, missing headers,
+        # webhook not configured) is a bounded "rejected" outcome — the
+        # exception itself, delivery id, and headers are never used as
+        # label values.
+        record_github_webhook_delivery(settings, event=event_header, outcome="rejected")
+        raise
+    record_github_webhook_delivery(settings, event=result.event_type, outcome=result.status)
 
     if result.status == "accepted" and result.event_type == "pull_request":
         await _dispatch_pr_analysis(

@@ -34,6 +34,7 @@ recomputing risk (spec §28's "never recompute risk solely because
 publishing failed").
 """
 
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.actions import AuditAction
 from app.compatibility.models import CompatibilityStatus
+from app.core.config import get_settings
 from app.domain.exceptions import (
     ComponentVersionNotFound,
     GitHubAnalysisHeadShaMismatch,
@@ -70,7 +72,11 @@ from app.models.compatibility_scan import CompatibilityScan
 from app.models.github_pr_analysis import GitHubPullRequestAnalysis
 from app.models.github_repository_mapping import GitHubRepositoryMapping
 from app.models.risk_assessment import RiskAssessmentRecord
-from app.observability import start_span
+from app.observability import (
+    record_analysis_run,
+    record_github_pr_analysis,
+    start_span,
+)
 from app.repositories.github_pr_analysis_repository import GitHubPRAnalysisRepository
 from app.repositories.github_repository_mapping_repository import (
     GitHubRepositoryMappingRepository,
@@ -136,6 +142,7 @@ class GitHubPullRequestAnalysisService:
         )
         if not created:
             return analysis
+        record_github_pr_analysis(get_settings(), outcome="started")
         return await self.run_analysis(
             project_id=analysis.project_id,
             analysis_id=analysis.id,
@@ -156,9 +163,11 @@ class GitHubPullRequestAnalysisService:
         for this row and returns; `run_analysis` does the actual work,
         later, in a worker."""
 
-        analysis, _created = await self._start_or_get(
+        analysis, created = await self._start_or_get(
             payload, delivery_id=delivery_id, request_id=request_id
         )
+        if created:
+            record_github_pr_analysis(get_settings(), outcome="started")
         return analysis
 
     async def list_analyses(
@@ -263,6 +272,9 @@ class GitHubPullRequestAnalysisService:
         pipeline (`_run_analysis_impl`) rather than importing
         OpenTelemetry into the deterministic engines it calls."""
 
+        settings = get_settings()
+        start = time.monotonic()
+        status = "success"
         with start_span(
             "agentabi.github.pr_analysis",
             attributes={
@@ -271,11 +283,31 @@ class GitHubPullRequestAnalysisService:
                 "agentabi.head_sha": expected_head_sha,
             },
         ):
-            return await self._run_analysis_impl(
-                project_id=project_id,
-                analysis_id=analysis_id,
-                expected_head_sha=expected_head_sha,
-            )
+            try:
+                result = await self._run_analysis_impl(
+                    project_id=project_id,
+                    analysis_id=analysis_id,
+                    expected_head_sha=expected_head_sha,
+                )
+            except Exception:
+                status = "failure"
+                record_github_pr_analysis(settings, outcome="failed")
+                raise
+            else:
+                record_github_pr_analysis(
+                    settings,
+                    outcome="completed"
+                    if result.status == GitHubPRAnalysisStatus.COMPLETED.value
+                    else "failed",
+                )
+                return result
+            finally:
+                record_analysis_run(
+                    settings,
+                    pipeline="github_pr_analysis",
+                    status=status,
+                    duration_seconds=time.monotonic() - start,
+                )
 
     async def _run_analysis_impl(
         self,

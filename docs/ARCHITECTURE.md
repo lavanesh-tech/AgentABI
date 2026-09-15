@@ -1994,3 +1994,162 @@ pytest-executed (no project dependency, including `pytest` itself, is
 installed this session). `docker compose config` validates the added
 service. No real trace smoke test was produced — both a working install
 and a running collector are required and neither is available here.
+
+## Phase 16: Prometheus Metrics + Grafana Dashboards
+
+**Purpose**: answer "is AgentABI healthy right now" from a scrape
+endpoint — request rate/error rate/latency, analysis throughput, Kafka
+throughput/failures, PASS/WARN/BLOCK counts, GitHub/OpenAI call health —
+as pure observability. Metrics never compute or alter compatibility
+results, replay outcomes, differential reports, risk scores, or PASS/
+WARN/BLOCK; they only observe values the deterministic engines already
+produced (spec §2, unchanged from every prior phase's invariant).
+
+**Deliberately separate from tracing** (ADR-073): `app.observability.
+tracing` (Phase 15) is the only module touching `opentelemetry.*`;
+`app.observability.metrics` (Phase 16) is the only module touching
+`prometheus_client`, never routed through OTel's metrics API. Both share
+one package (`app/observability/`), one `__init__.py` re-export surface,
+and one defensive posture — library absent, or `*_ENABLED=false` ->
+complete no-op; any internal failure -> logged and swallowed, never a
+request-breaking exception.
+
+**Central module** (`app/observability/metrics.py`): `_counter`/
+`_histogram`/`_gauge` factory functions build real `prometheus_client`
+objects when the library is importable, or a `_NoOpMetric` stand-in
+(same `.labels().inc()/.observe()/.set()` call shape) otherwise — every
+other module records through small `record_*()`/`track_*_in_progress()`
+helpers, never touching `prometheus_client` directly. A single
+process-wide `CollectorRegistry` backs every metric (`_get_registry()`),
+rendered by `render_metrics(settings)` for the `/metrics` route.
+
+**Cardinality safety (mandatory, spec §22; ADR-074)**: `_assert_safe_
+labels()` runs at metric-registration time (import time) against
+`FORBIDDEN_LABEL_NAMES` — `project_id, organization_id, component_id,
+event_id, trace_id, request_id, correlation_id, pull_request_number,
+head_sha, email, github_username, url, exception, exception_message` —
+raising `ValueError` if any declared labelname matches. `tests/
+test_metrics_cardinality_safety.py` re-verifies the same set statically
+via AST inspection of every `_counter`/`_histogram`/`_gauge` call in the
+module, independent of the runtime check. HTTP request labels use the
+Starlette route *template* (`request.scope["route"].path`), never the
+resolved path — an unmatched/probed route collapses to one bounded
+`"unmatched"` label rather than an unbounded raw path.
+
+**Config** (`Settings`): `metrics_enabled` (default `True` — unlike
+tracing, metrics are meant to be always-on; `/metrics` simply renders a
+placeholder body if the library isn't installed or the flag is off, so
+this default never breaks a deployment without Prometheus set up),
+`metrics_path` (default `/metrics`), `metrics_worker_port` (default
+`9101`, the Kafka worker's own metrics listener).
+
+**`/metrics` endpoint** (`app/main.py`): a plain route added directly in
+`create_app()`, deliberately outside `api_router`/`api_v1_prefix` — no
+JSON envelope, no AgentABI JWT dependency (this is a local/internal-
+network scrape target, not an authenticated API client; a production
+deployment should firewall it at the network layer rather than expect
+per-request auth here — that's the documented security boundary from
+spec §6), and `include_in_schema=False` so it never appears in the
+OpenAPI/Swagger surface.
+
+**HTTP middleware** (`app/core/metrics_middleware.
+PrometheusMetricsMiddleware`, added outermost in `create_app()`'s
+middleware stack so its timing covers every other middleware layer):
+records `agentabi_http_requests_total`/`_request_duration_seconds`
+(method, route template, status) and `agentabi_http_requests_in_progress`
+(method only — the route isn't resolved until routing runs partway
+through the request, so the in-progress gauge can't be labeled by it
+without a race).
+
+**Metric families** (full list and label vocabulary in `app/
+observability/metrics.py`'s module docstring and declarations):
+- HTTP: requests/duration/in-progress (above).
+- Analysis pipeline: `agentabi_analysis_runs_total`/`_duration_seconds`
+  (pipeline=compatibility/replay/differential/risk/
+  github_pr_analysis, status=success/failure) — recorded in the same
+  five service-boundary wrapper methods Phase 15's spans already use
+  (`CompatibilityService.run_scan`, `RiskService.run_assessment`,
+  `ReplayService.execute_replay`, `DifferentialService.run_analysis`,
+  `GitHubPullRequestAnalysisService.run_analysis`).
+- Risk decisions (mandatory, spec §8/§38): `agentabi_risk_decisions_
+  total{decision, hard_block}` + `agentabi_risk_score` (bucketed
+  histogram, unlabeled) — `RiskService.run_assessment` calls
+  `record_risk_decision(decision=record.decision,
+  hard_block=record.hard_block, score=record.score)` using the
+  already-persisted record's own fields; nothing in the metrics path
+  ever calls `evaluate()` or constructs a `RiskContext`. `tests/
+  test_risk_metrics_mandatory.py` asserts this structurally.
+- Kafka: `agentabi_kafka_published_total`/`_publish_duration_seconds`,
+  `agentabi_kafka_consumed_total`/`_processing_duration_seconds`,
+  `agentabi_kafka_retries_total`, `agentabi_kafka_dlq_total` — all
+  labeled by `event_type`/bounded `outcome`/`reason`, never event
+  id/partition/offset. `tests/test_kafka_metrics_regression.py` (spec
+  §39, mandatory) asserts the envelope schema, header-only trace
+  propagation, partition key, idempotency, retry policy (no commit on
+  a bare transient retry), DLQ routing, and commit policy are all
+  unchanged by the added metric calls.
+- Worker: `agentabi_worker_in_progress{event_type}` gauge helper
+  (`track_worker_in_progress`, available for future use); the worker's
+  own `start_worker_metrics_server(settings)` opens a dedicated
+  `prometheus_client.start_http_server()` listener on `metrics_worker_
+  port` since the worker isn't a FastAPI process (spec §14).
+- GitHub: `agentabi_github_webhook_deliveries_total{event, outcome}`
+  (`app/api/v1/github_webhook.py`), `agentabi_github_pr_analyses_
+  total{outcome}` (started/completed/failed —
+  `GitHubPullRequestAnalysisService`), `agentabi_github_check_publish_
+  total{action, outcome}` + `agentabi_github_api_failures_
+  total{action}` (`checks_client.py`'s create/update calls) — never
+  repository name, PR number, or head SHA as a label.
+- OpenAI: `agentabi_openai_explanations_total`/`_explanation_duration_
+  seconds{outcome, model}` — `model` is the small, operator-configured
+  `openai_model` setting, not user input, so it stays bounded.
+  `tests/test_openai_metrics_regression.py` (spec §40, mandatory)
+  asserts `_explain_impl` itself is untouched by the metrics wiring and
+  that exceptions still propagate (never swallowed by the `finally`
+  block that records duration).
+- Errors: `agentabi_errors_total{error_type}` — bounded to
+  `validation|dependency|timeout|internal`, mapped from the HTTP status
+  code each exception handler already resolves to
+  (`app/api/v1/errors.py`); an unrecognized category is coerced to
+  `internal` rather than accepted as an arbitrary label value.
+- Dependency (declared, not yet wired to a call site — spec §18's
+  "only if useful, never fabricated"): `agentabi_dependency_requests_
+  total`/`_request_duration_seconds{dependency, outcome}`, broad
+  success/failure/latency only, available for a future phase to attach
+  to Postgres/Redis/Neo4j boundaries without inventing new metric
+  families then.
+
+**Prometheus + Grafana (local, `docker-compose.yml`)**: `observability/
+prometheus.yml` scrapes `api:8000/metrics` and the newly-containerized
+`worker:9101/metrics` (the Kafka worker had never been added as a
+compose service before this phase — same image as `api`, `python -m
+app.kafka.worker`), no credentials, no remote_write. `observability/
+grafana/provisioning/` auto-provisions Prometheus as Grafana's default
+datasource and auto-loads `observability/grafana/dashboards/agentabi-
+overview.json` (14 panels — HTTP rate/error-rate/p95 latency, per-
+pipeline analysis throughput/p95 duration, PASS/WARN/BLOCK rate, risk-
+score heatmap, hard-block count, Kafka publish/consume throughput, Kafka
+retries/DLQ, GitHub PR analysis outcomes, GitHub check-publish failures,
+OpenAI p95 latency/failure rate, errors by category) so `docker compose
+up` produces a working dashboard with zero manual clicking. `grafana`
+runs on host port `3001` (3000 is already the frontend); `GF_SECURITY_
+ADMIN_PASSWORD` defaults to a documented local-only placeholder
+(`GRAFANA_ADMIN_PASSWORD` env override, never a real secret committed).
+
+**Failure-open** (spec §24, same posture as Phase 15): every metric
+factory/recording function catches all exceptions and logs a warning
+rather than raising; `GET /api/v1/ready` has no metrics dependency, and
+`METRICS_ENABLED=false` skips every recording call without needing
+`prometheus_client` importable at all.
+
+**Verification**: `prometheus-client` is a pure-Python wheel but, like
+every other dependency in this project, could not be installed in this
+sandbox this session (PyPI unreachable). All observability code is
+written, `ruff format --check`/`ruff check`/`python3.12 -m py_compile`
+clean; new tests are written/`py_compile`-clean, not pytest-executed.
+`docker compose config` validates the added `worker`/`prometheus`/
+`grafana` services; the dashboard JSON validates via `json.load`, and
+all three new/changed YAML files validate via `yaml.safe_load`. No real
+local observability smoke test was produced — the Docker daemon is
+unavailable in this sandbox (confirmed directly in Phase 14), so it was
+honestly skipped rather than fabricated.

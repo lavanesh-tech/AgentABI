@@ -106,6 +106,68 @@ services:
     volumes:
       - ./backend/app:/app/app
 
+  # Phase 13's Kafka worker, containerized here for the first time so
+  # Phase 16's Prometheus config has a real scrape target (spec §14). Not
+  # in `api`'s image build — same image, different command — so it stays
+  # in lockstep with the API's dependency set without a second Dockerfile.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.kafka.worker"]
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://agentabi:agentabi@postgres:5432/agentabi
+      REDIS_DSN: redis://redis:6379/0
+      NEO4J_URI: bolt://neo4j:7687
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_ENABLED: "true"
+      OTEL_SERVICE_NAME: agentabi-worker
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    ports:
+      - "9101:9101" # Prometheus metrics (spec §14) — no FastAPI in this process
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+
+  # Phase 16: scrapes api/worker `/metrics`. No remote_write, no
+  # credentials, config lives entirely in observability/prometheus.yml.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+
+  # Phase 16: auto-provisioned datasource + dashboard (spec §30) — no
+  # manual clicking needed after `docker compose up`. Local-only
+  # placeholder admin credentials (never real secrets — spec §32);
+  # override GRAFANA_ADMIN_PASSWORD via .env for anything beyond a
+  # laptop.
+  grafana:
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-agentabi_local_only}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/provisioning/dashboards/files:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000" # host 3001 — 3000 is already the frontend (`web`)
+    depends_on:
+      - prometheus
+
   web:
     build:
       context: ./frontend
@@ -122,3 +184,5 @@ volumes:
   redis_data:
   neo4j_data:
   kafka_data:
+  prometheus_data:
+  grafana_data:

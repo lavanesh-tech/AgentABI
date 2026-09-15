@@ -8,13 +8,16 @@ exercised by `pytest` here. `app/events/fake_publisher.py` is what
 are actually tested against.
 """
 
+import time
+
 from aiokafka import AIOKafkaProducer
 from aiokafka.errors import KafkaError
 
+from app.core.config import get_settings
 from app.events.envelope import EventEnvelope, serialize_envelope
 from app.events.errors import TransientEventProcessingError
 from app.events.publisher import resolve_topic
-from app.observability import inject_trace_headers, start_span
+from app.observability import inject_trace_headers, record_kafka_published, start_span
 
 
 class KafkaEventPublisher:
@@ -69,13 +72,26 @@ class KafkaEventPublisher:
                 "agentabi.correlation_id": event.correlation_id,
             },
         ):
+            publish_start = time.monotonic()
             try:
                 await self._producer.send_and_wait(topic, value=value, key=key, headers=headers)
             except KafkaError as exc:
+                record_kafka_published(
+                    get_settings(),
+                    event_type=event.event_type,
+                    outcome="failure",
+                    duration_seconds=time.monotonic() - publish_start,
+                )
                 # A publish failure is always transient from the caller's
                 # perspective (spec §20/§29) — never fabricated as success,
                 # never silently swallowed.
                 raise TransientEventProcessingError(f"Kafka publish failed: {exc}") from exc
+            record_kafka_published(
+                get_settings(),
+                event_type=event.event_type,
+                outcome="success",
+                duration_seconds=time.monotonic() - publish_start,
+            )
 
 
 __all__ = ["KafkaEventPublisher"]

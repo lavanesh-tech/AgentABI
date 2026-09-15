@@ -1,0 +1,12 @@
+# Phase 16 — auto-provisions Prometheus as Grafana's default datasource
+# so `docker compose up` produces a working dashboard with no manual
+# clicking (spec §30). No credentials — Prometheus has none locally.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

@@ -484,7 +484,9 @@ to complete verification before starting Phase 10.
 
 ## Phase 15 — OpenTelemetry: COMPLETE
 
-## Phase 16 — Prometheus + Grafana: NEXT
+## Phase 16 — Prometheus + Grafana: COMPLETE
+
+## Phase 17 — Terraform: NEXT
 
 Gemini (Phase 9) remains SKIPPED/OPTIONAL.
 
@@ -565,6 +567,114 @@ Run `cd backend && pip install -e ".[dev]" && pytest && cd .. && docker
 compose up -d otel-collector api worker` locally, with `OTEL_ENABLED=true`,
 to complete verification and produce a real trace before starting
 Phase 16.
+
+## Phase 16 — Prometheus + Grafana: COMPLETE (detail)
+
+Adds `backend/app/observability/metrics.py` (Phase 16 spec §5's "extend,
+don't scatter" — same `app/observability/` package as Phase 15's
+tracing, deliberately separate module: `prometheus_client` for metrics,
+`opentelemetry` for traces, never mixed — ADR-073). `METRICS_ENABLED=true`
+by default, `METRICS_PATH=/metrics` (`app/core/config.py`); the API
+exposes it as a plain, unauthenticated (no AgentABI JWT — spec §6's
+documented security boundary, meant for a local/internal-network
+scraper), OpenAPI-excluded route added directly in `create_app()`, never
+routed through the JSON error envelope. `app/core/metrics_middleware.py`
+(`PrometheusMetricsMiddleware`, added outermost in the middleware stack)
+records `agentabi_http_requests_total`/`_duration_seconds`/
+`_in_progress`, labeled by method + the Starlette route *template*
+(`request.scope["route"].path`) — never the raw resolved path, which is
+what keeps an unmatched/probed route from exploding cardinality (it
+collapses to a single `"unmatched"` label instead).
+
+Every metric name/label vocabulary lives in one file
+(`app/observability/metrics.py`); every other module calls small
+`record_*()` helpers re-exported from `app.observability`, never
+`prometheus_client` directly. Cardinality safety (spec §22, mandatory)
+is enforced at metric-registration time — `_assert_safe_labels()` raises
+if any declared labelname is in the explicit forbidden set
+(`project_id, organization_id, component_id, event_id, trace_id,
+request_id, correlation_id, pull_request_number, head_sha, email,
+github_username, url, exception[_message]`) — and re-verified statically
+by `tests/test_metrics_cardinality_safety.py` via AST inspection
+(ADR-074).
+
+Instrumented alongside the existing Phase 15 spans, never replacing
+them: `agentabi_analysis_runs_total`/`_duration_seconds` (pipeline=
+compatibility/replay/differential/risk/github_pr_analysis, status=
+success/failure) at the same five service-boundary wrapper methods Phase
+15 already uses; `agentabi_risk_decisions_total` (decision, hard_block)
++ `agentabi_risk_score` (bucketed histogram, no labels) recorded in
+`RiskService.run_assessment` from the already-persisted `record`'s own
+`decision`/`hard_block`/`score` fields — never recomputed, verified by
+the **mandatory** `tests/test_risk_metrics_mandatory.py` (spec §8/§38);
+Kafka publish/consume/retry/DLQ counters and duration histograms in
+`kafka_publisher.py`/`app/kafka/consumer.py` (event_type/outcome labels
+only — never event_id/partition/offset), regression-checked by `tests/
+test_kafka_metrics_regression.py` (spec §39: envelope/headers/partition
+key/idempotency/retry/DLQ/commit policy all unchanged); GitHub webhook-
+delivery/PR-analysis/check-publish counters in `github_webhook.py`/
+`github_pr_analysis_service.py`/`checks_client.py` (action/outcome
+labels — never repository name/PR number/SHA); OpenAI explanation
+counters/duration in `openai_provider.py` (outcome + model — the model
+is a small operator-configured set, not user input), regression-checked
+by `tests/test_openai_metrics_regression.py` (spec §40: `_explain_impl`
+itself is untouched, exceptions still propagate through the metrics
+`finally` block rather than being swallowed); a bounded `agentabi_errors_
+total{error_type}` (validation|dependency|timeout|internal, mapped from
+HTTP status code — never raw exception text) wired into `app/api/v1/
+errors.py`'s existing exception handlers.
+
+The Kafka worker (`app/kafka/worker.py`) is not a FastAPI process, so it
+calls `prometheus_client.start_http_server()` directly on its own port
+(`METRICS_WORKER_PORT=9101`, spec §14) rather than sharing the API's
+`/metrics` route — `docker-compose.yml` gained a `worker` service (same
+image as `api`, `python -m app.kafka.worker`, first time this worker has
+been containerized) exposing that port. `observability/prometheus.yml`
+(new) scrapes `api:8000/metrics` and `worker:9101/metrics`, no
+credentials, no remote_write. `observability/grafana/provisioning/`
+(new) auto-provisions Prometheus as Grafana's default datasource and
+auto-loads `observability/grafana/dashboards/agentabi-overview.json` (14
+panels: HTTP rate/error-rate/p95 latency, per-pipeline analysis
+throughput/p95 duration, PASS/WARN/BLOCK rate, risk-score heatmap,
+hard-block count, Kafka publish/consume throughput, Kafka retries/DLQ,
+GitHub PR analysis outcomes, GitHub check-publish failures, OpenAI p95
+latency/failure rate, errors by category) — `docker compose up` produces
+a working dashboard with zero manual clicking. `docker-compose.yml`
+gained `prometheus` (`:9090`) and `grafana` (`:3001` on the host — 3000
+is already the frontend) services with local-only placeholder Grafana
+admin credentials (`GRAFANA_ADMIN_PASSWORD`, default documented as
+local-only, never a real secret).
+
+Same sandbox restriction as every prior phase, now confirmed to also
+cover `prometheus-client`: `pip install prometheus-client` returns "No
+matching distribution found" — PyPI itself is unreachable in this
+sandbox this session. Every touched/added module is `python3.12 -m
+py_compile`-clean, and `ruff format`/`ruff check` are clean across the
+full `app`/`tests` tree (one `--fix` pass for import ordering). `mypy`
+fails immediately on the `pydantic.mypy` plugin import (pydantic itself
+isn't installed) — same as every prior phase; `pytest` fails at
+`conftest.py` collection (`httpx` isn't installed) — also same as every
+prior phase. New tests (`test_metrics_helpers.py`,
+`test_metrics_cardinality_safety.py`, `test_http_metrics_middleware.py`,
+`test_risk_metrics_mandatory.py`, `test_kafka_metrics_regression.py`,
+`test_openai_metrics_regression.py`) are written/`py_compile`-clean, not
+pytest-executed. `docker compose config` validates cleanly with
+`worker`/`prometheus`/`grafana` added (confirmed by direct invocation).
+Dashboard JSON validated via `json.load`; all three new/changed YAML
+files validated via `yaml.safe_load` (PyYAML happens to be present in
+this sandbox, unlike every project dependency). No real local
+observability smoke test was attempted — the Docker daemon itself is
+unavailable in this sandbox (confirmed directly in Phase 14), so it was
+honestly skipped rather than fabricated, same posture as Phase 15's
+trace smoke test.
+
+Run `cd backend && pip install -e ".[dev]" && pytest && cd .. && docker
+compose up -d` locally to complete verification, hit a few routes, curl
+`http://localhost:8000/metrics`, confirm the `agentabi-api`/`agentabi-
+worker` targets show UP at `http://localhost:9090/targets`, and open
+`http://localhost:3001` (admin / the configured password) to see the
+provisioned "AgentABI — System Overview" dashboard before starting Phase
+17.
 
 ## Phase 14 — Frontend Dashboard: COMPLETE (detail)
 

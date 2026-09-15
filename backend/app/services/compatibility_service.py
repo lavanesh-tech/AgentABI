@@ -9,18 +9,20 @@ is the entire deterministic decision surface, and stays independently
 testable without a database.
 """
 
+import time
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.compatibility.analyzer import analyze
 from app.compatibility.models import Classification, Severity
+from app.core.config import get_settings
 from app.domain.exceptions import CompatibilityScanNotFound, InvalidCompatibilityComparison
 from app.models.compatibility_scan import CompatibilityScan
 from app.models.component import Component
 from app.models.component_version import ComponentVersion
 from app.models.scan_change import ScanChange
-from app.observability import start_span
+from app.observability import record_analysis_run, start_span
 from app.repositories.compatibility_scan_repository import CompatibilityScanRepository
 from app.services.component_registry import ComponentRegistryService, Page
 
@@ -46,6 +48,8 @@ class CompatibilityService:
         that doesn't share that guarantee.
         """
 
+        start = time.monotonic()
+        status = "success"
         with start_span(
             "agentabi.compatibility.analyze",
             attributes={
@@ -55,14 +59,25 @@ class CompatibilityService:
                 "agentabi.candidate_version": candidate_version,
             },
         ):
-            component = await self._registry.get_component(project_id, component_id)
-            baseline = await self._registry.get_component_version(
-                project_id, component_id, baseline_version
-            )
-            candidate = await self._registry.get_component_version(
-                project_id, component_id, candidate_version
-            )
-            return await self._scan_from_versions(project_id, component, baseline, candidate)
+            try:
+                component = await self._registry.get_component(project_id, component_id)
+                baseline = await self._registry.get_component_version(
+                    project_id, component_id, baseline_version
+                )
+                candidate = await self._registry.get_component_version(
+                    project_id, component_id, candidate_version
+                )
+                return await self._scan_from_versions(project_id, component, baseline, candidate)
+            except Exception:
+                status = "failure"
+                raise
+            finally:
+                record_analysis_run(
+                    get_settings(),
+                    pipeline="compatibility",
+                    status=status,
+                    duration_seconds=time.monotonic() - start,
+                )
 
     async def _scan_from_versions(
         self,
