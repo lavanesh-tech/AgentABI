@@ -14,6 +14,7 @@ from app.api.v1.github_repositories import router as github_repositories_router
 from app.api.v1.github_webhook import router as github_webhook_router
 from app.api.v1.graph import router as graph_router
 from app.api.v1.health import router as health_router
+from app.api.v1.organizations import router as organizations_router
 from app.api.v1.projects import router as projects_router
 from app.api.v1.replays import router as replays_router
 from app.api.v1.risk import router as risk_router
@@ -27,6 +28,7 @@ api_router = APIRouter()
 # authz/validation surface to document failures for.
 api_router.include_router(health_router)
 api_router.include_router(auth_router, responses=COMMON_ERROR_RESPONSES)
+api_router.include_router(organizations_router, responses=COMMON_ERROR_RESPONSES)
 api_router.include_router(projects_router, responses=COMMON_ERROR_RESPONSES)
 api_router.include_router(components_router, responses=COMMON_ERROR_RESPONSES)
 api_router.include_router(graph_router, responses=COMMON_ERROR_RESPONSES)

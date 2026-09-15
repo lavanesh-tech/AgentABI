@@ -39,7 +39,7 @@ function CallbackInner() {
       })
       .then((result) => {
         completeLogin(result);
-        router.replace("/dashboard");
+        router.replace(result.requires_onboarding ? "/onboarding" : "/dashboard");
       })
       .catch((err) => setError(friendlyErrorMessage(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps

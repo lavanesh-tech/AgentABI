@@ -169,6 +169,66 @@
               }
             }
           ]
+        },
+        {
+          "name": "Create First Organization (Onboarding)",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{base_url}}/api/v1/organizations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "organizations"
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Demo Organization\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Authenticated self-service onboarding (requires access_token to already be set). Creates the caller's first organization and grants them OWNER \u2014 only when the caller currently has zero organization memberships. Accepts only `name`; no role, organization id, or other user's id can be supplied. Returns a fresh access_token carrying the new organization context \u2014 update the access_token environment variable with it to act as the new OWNER. Calling this again after already belonging to an organization returns 409 Conflict."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 201 or 409', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([201, 409]);",
+                  "});",
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.environment.set('organization_id', body.organization_id);",
+                  "    pm.environment.set('access_token', body.access_token);",
+                  "}",
+                  "if (pm.response.code === 409) {",
+                  "    pm.test('error envelope has code/message/request_id', function () {",
+                  "        const body = pm.response.json();",
+                  "        pm.expect(body.error).to.have.property('code');",
+                  "        pm.expect(body.error).to.have.property('message');",
+                  "        pm.expect(body.error).to.have.property('request_id');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
