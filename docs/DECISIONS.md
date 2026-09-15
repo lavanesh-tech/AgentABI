@@ -2,6 +2,34 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-082 — Grafana dashboard files mount as a sibling path, not nested under the read-only provisioning mount (2026-09-15)
+
+Real local verification: `docker compose up` failed to start Grafana —
+`error mounting ".../observability/grafana/dashboards" to
+"/etc/grafana/provisioning/dashboards/files": create mountpoint ...
+read-only file system`. The `grafana` service mounted
+`./observability/grafana/provisioning` read-only at
+`/etc/grafana/provisioning`, then separately mounted
+`./observability/grafana/dashboards` at
+`/etc/grafana/provisioning/dashboards/files` — a path nested *inside*
+the first mount's target. Docker has to create that nested path as a
+mountpoint before attaching the second bind mount, and can't do that
+inside a filesystem it already mounted read-only.
+
+Fixed by mounting the dashboards directory at a sibling path,
+`/etc/grafana/dashboards`, instead — both bind mounts now attach
+directly to the image's own `/etc/grafana` directory, neither nested
+inside the other. Updated
+`observability/grafana/provisioning/dashboards/provider.yml`'s `path:`
+to match. No change to what's provisioned: the same datasource, the same
+dashboard JSON, the same `grafana_data` named volume for persistence,
+still fully self-hosted (no Grafana Cloud). Design rule: when Grafana
+provisioning config and the dashboard files it references are mounted as
+two separate bind mounts, keep their container targets siblings — never
+nest one bind mount's target inside another read-only bind mount's
+target. Enforced generally (any service, any bind mount) by
+`tests/test_compose_bind_mounts.py`.
+
 ## ADR-081 — `worker` gets its own compose-level healthcheck; it no longer inherits `api`'s (2026-09-15)
 
 Real local verification: the worker container ran and consumed from
