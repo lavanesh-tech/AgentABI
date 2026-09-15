@@ -2,6 +2,40 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-074 — Cardinality safety enforced at metric-registration time, not just by convention (2026-09-15)
+
+Phase 16 spec §22 lists exact label names that must never appear on any
+Prometheus metric (`project_id, organization_id, component_id, event_id,
+trace_id, request_id, correlation_id, pull_request_number, head_sha,
+email, github_username, url, exception`/`exception_message`). Rather than
+relying on code review alone, `app/observability/metrics.py`'s
+`_counter`/`_histogram`/`_gauge` factory functions call
+`_assert_safe_labels()` against a `FORBIDDEN_LABEL_NAMES` frozenset
+before ever constructing a `prometheus_client` metric — a labelname
+violation raises at import time (fails loud, at process startup, not
+silently at scrape time), and `tests/test_metrics_cardinality_safety.py`
+statically re-verifies the same set via AST inspection of every declared
+metric. HTTP request labels use the route *template*
+(`request.scope["route"].path`, e.g. `/api/v1/projects/{project_id}`),
+never the raw resolved path — this is what keeps an attacker probing
+random URLs from becoming a cardinality-explosion vector, and unmatched
+routes collapse to a single `"unmatched"` label rather than the raw path.
+
+## ADR-073 — Prometheus client library owns metrics directly; OpenTelemetry stays trace-only (2026-09-15)
+
+Phase 16 spec §33 requires metrics and tracing to stay architecturally
+separate: `app.observability.tracing` (Phase 15) is the only module that
+touches `opentelemetry.*`; the new `app.observability.metrics` (Phase 16)
+is the only module that touches `prometheus_client`, and never routes
+through OTel's own metrics API. Two libraries, two concerns, one
+boundary each — this avoids coupling metric cardinality/bucket decisions
+to whatever OTel's SDK metrics exporter happens to support, and keeps
+Phase 15's tracing code completely untouched by this phase (no shared
+mutable state, no combined initialization order to reason about). Both
+modules share the same defensive posture: absent library -> no-op,
+`*_ENABLED=false` -> no-op, any internal failure -> logged and swallowed,
+never a request-breaking exception (spec §24).
+
 ## ADR-072 — Trace context in Kafka headers only, never the event payload; domain spans at service boundaries, not inside `app/risk/` (2026-09-14)
 
 Phase 15 spec §10 is explicit that W3C trace context must travel in

@@ -193,6 +193,19 @@ class Settings(BaseSettings):
     def otel_resource_environment(self) -> str:
         return self.otel_environment or self.environment
 
+    # --- Prometheus metrics (Phase 16) -------------------------------------
+    # On by default (spec §5) — unlike tracing, metrics are meant to be the
+    # always-on operational signal; `/metrics` simply degrades to a
+    # placeholder body if `prometheus_client` isn't installed (see
+    # app/observability/metrics.py's render_metrics), so leaving this true
+    # never breaks a deployment that hasn't set up Prometheus yet.
+    metrics_enabled: bool = True
+    metrics_path: str = "/metrics"
+    # Spec §14: the Kafka worker isn't a FastAPI process, so it can't serve
+    # `/metrics` off the API's router — it opens this separate port via
+    # `prometheus_client.start_http_server` instead when metrics are on.
+    metrics_worker_port: int = 9101
+
     @property
     def is_local(self) -> bool:
         return self.environment == "local"

@@ -22,6 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.core.config import get_settings
 from app.domain.exceptions import (
     AgentABIError,
     AuthenticationError,
@@ -69,6 +70,7 @@ from app.domain.exceptions import (
     UnsupportedCompatibilityType,
     WebhookSignatureError,
 )
+from app.observability import record_error
 
 logger = structlog.get_logger(__name__)
 
@@ -173,6 +175,23 @@ def _request_id(request: Request) -> str:
     return getattr(request.state, "correlation_id", None) or str(uuid.uuid4())
 
 
+def _error_category_for_status(status_code: int) -> str:
+    """Bounded mapping (spec §20) from an HTTP status to one of
+    validation|dependency|timeout|internal — never the exception text or
+    type name itself, which is what `record_error()` refuses anyway."""
+
+    if status_code == status.HTTP_504_GATEWAY_TIMEOUT:
+        return "timeout"
+    if status_code in (
+        status.HTTP_502_BAD_GATEWAY,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+    ):
+        return "dependency"
+    if 400 <= status_code < 500:
+        return "validation"
+    return "internal"
+
+
 def _envelope(status_code: int, code: str, message: str, request_id: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -183,6 +202,7 @@ def _envelope(status_code: int, code: str, message: str, request_id: str) -> JSO
 def register_exception_handlers(app: FastAPI) -> None:
     def _make_handler(status_code: int, code: str):
         async def _handler(request: Request, exc: Exception) -> JSONResponse:
+            record_error(get_settings(), error_type=_error_category_for_status(status_code))
             return _envelope(status_code, code, str(exc), _request_id(request))
 
         return _handler
@@ -235,6 +255,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             }
             for error in exc.errors()
         ]
+        record_error(get_settings(), error_type="validation")
         request_id = _request_id(request)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -255,6 +276,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         # this logger's existing redaction path elsewhere in the app.
         # Never: traceback, SQL text, Redis error text, JWT internals,
         # OAuth provider payloads, or environment values reach the client.
+        record_error(get_settings(), error_type="internal")
         request_id = _request_id(request)
         logger.exception(
             "unhandled_exception",

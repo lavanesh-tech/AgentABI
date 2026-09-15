@@ -7,11 +7,13 @@ network-dependent module — see `app/events/kafka_publisher.py`), so this
 module is not exercised by `pytest` here.
 """
 
+import time
 from collections.abc import Awaitable, Callable
 
 import structlog
 from aiokafka import AIOKafkaConsumer
 
+from app.core.config import get_settings
 from app.events.envelope import EventEnvelope, deserialize_envelope
 from app.events.errors import (
     MalformedEventPayload,
@@ -20,7 +22,14 @@ from app.events.errors import (
     UnsupportedEventVersion,
 )
 from app.events.handler import EventHandler
-from app.observability import extract_trace_context, set_current_span_attributes, start_span
+from app.observability import (
+    extract_trace_context,
+    record_kafka_consumed,
+    record_kafka_dlq,
+    record_kafka_retry,
+    set_current_span_attributes,
+    start_span,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -77,6 +86,7 @@ class KafkaEventConsumer:
         # starting this message's span, so it's a child of the
         # producer's span rather than the start of a new trace.
         parent_context = extract_trace_context(getattr(message, "headers", None))
+        process_start = time.monotonic()
         with start_span(
             "agentabi.kafka.consume",
             kind="consumer",
@@ -100,13 +110,26 @@ class KafkaEventConsumer:
                     partition=message.partition,
                     offset=message.offset,
                 )
-                await self._to_dlq(message, "malformed_payload", retry_count=0)
+                await self._to_dlq(
+                    message, "malformed_payload", retry_count=0, event_type="unknown"
+                )
                 await self._consumer.commit()
+                record_kafka_consumed(
+                    get_settings(),
+                    event_type="unknown",
+                    outcome="malformed_payload",
+                    duration_seconds=time.monotonic() - process_start,
+                )
                 return
 
-            await self._dispatch_with_retry(message, envelope)
+            await self._dispatch_with_retry(message, envelope, process_start)
 
-    async def _dispatch_with_retry(self, message, envelope: EventEnvelope) -> None:  # noqa: ANN001
+    async def _dispatch_with_retry(
+        self,
+        message,
+        envelope: EventEnvelope,
+        process_start: float,  # noqa: ANN001
+    ) -> None:
         set_current_span_attributes(
             {
                 "agentabi.event_id": envelope.event_id,
@@ -114,6 +137,7 @@ class KafkaEventConsumer:
                 "agentabi.correlation_id": envelope.correlation_id,
             }
         )
+        settings = get_settings()
         attempt = 0
         while True:
             try:
@@ -132,6 +156,12 @@ class KafkaEventConsumer:
                     correlation_id=envelope.correlation_id,
                     retry_count=attempt,
                 )
+                record_kafka_consumed(
+                    settings,
+                    event_type=envelope.event_type,
+                    outcome="success",
+                    duration_seconds=time.monotonic() - process_start,
+                )
                 return
             except UnsupportedEventVersion:
                 # Spec §6: fail safely, never reinterpret — permanent.
@@ -140,8 +170,19 @@ class KafkaEventConsumer:
                     event_id=envelope.event_id,
                     event_type=envelope.event_type,
                 )
-                await self._to_dlq(message, "unsupported_event_version", retry_count=attempt)
+                await self._to_dlq(
+                    message,
+                    "unsupported_event_version",
+                    retry_count=attempt,
+                    event_type=envelope.event_type,
+                )
                 await self._consumer.commit()
+                record_kafka_consumed(
+                    settings,
+                    event_type=envelope.event_type,
+                    outcome="dlq",
+                    duration_seconds=time.monotonic() - process_start,
+                )
                 return
             except PermanentEventProcessingError:
                 logger.warning(
@@ -150,8 +191,19 @@ class KafkaEventConsumer:
                     event_type=envelope.event_type,
                     retry_count=attempt,
                 )
-                await self._to_dlq(message, "permanent_processing_error", retry_count=attempt)
+                await self._to_dlq(
+                    message,
+                    "permanent_processing_error",
+                    retry_count=attempt,
+                    event_type=envelope.event_type,
+                )
                 await self._consumer.commit()
+                record_kafka_consumed(
+                    settings,
+                    event_type=envelope.event_type,
+                    outcome="dlq",
+                    duration_seconds=time.monotonic() - process_start,
+                )
                 return
             except TransientEventProcessingError:
                 attempt += 1
@@ -162,8 +214,19 @@ class KafkaEventConsumer:
                         event_type=envelope.event_type,
                         retry_count=attempt,
                     )
-                    await self._to_dlq(message, "transient_retries_exhausted", retry_count=attempt)
+                    await self._to_dlq(
+                        message,
+                        "transient_retries_exhausted",
+                        retry_count=attempt,
+                        event_type=envelope.event_type,
+                    )
                     await self._consumer.commit()
+                    record_kafka_consumed(
+                        settings,
+                        event_type=envelope.event_type,
+                        outcome="dlq",
+                        duration_seconds=time.monotonic() - process_start,
+                    )
                     return
                 logger.info(
                     "kafka_transient_retry",
@@ -171,12 +234,20 @@ class KafkaEventConsumer:
                     event_type=envelope.event_type,
                     retry_count=attempt,
                 )
+                record_kafka_retry(settings, event_type=envelope.event_type)
                 # No commit — a crash here means Kafka redelivers this
                 # message, and the handler is required to be idempotent
                 # (spec §17/§46) so that's safe, not a duplicate-effect
                 # risk.
 
-    async def _to_dlq(self, message, failure_category: str, *, retry_count: int) -> None:  # noqa: ANN001
+    async def _to_dlq(
+        self,
+        message,  # noqa: ANN001
+        failure_category: str,
+        *,
+        retry_count: int,
+        event_type: str = "unknown",
+    ) -> None:
         set_current_span_attributes(
             {
                 "agentabi.retry_count": retry_count,
@@ -184,6 +255,7 @@ class KafkaEventConsumer:
                 "agentabi.dlq_reason": failure_category,
             }
         )
+        record_kafka_dlq(get_settings(), event_type=event_type, reason=failure_category)
         if self._dlq_publish is None:
             return
         try:

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.core.config import get_settings
 from app.domain.exceptions import (
     GitHubAPIUnavailable,
     GitHubAuthenticationFailed,
@@ -26,7 +27,7 @@ from app.github.checks_models import (
     CheckStatus,
     GitHubCredentialProvider,
 )
-from app.observability import start_span
+from app.observability import record_github_check_publish, start_span
 
 CHECKS_API_BASE = "https://api.github.com"
 _GITHUB_API_VERSION = "2022-11-28"
@@ -96,6 +97,7 @@ class HttpxGitHubChecksClient:
 
     async def create_check_run(self, request: CheckRunRequest) -> CheckRunResult:
         url = f"{CHECKS_API_BASE}/repos/{request.repository_full_name}/check-runs"
+        settings = get_settings()
         with start_span(
             "github.check.create",
             kind="client",
@@ -104,12 +106,19 @@ class HttpxGitHubChecksClient:
                 "agentabi.head_sha": request.head_sha,
             },
         ):
-            return await self._send("POST", url, request)
+            try:
+                result = await self._send("POST", url, request)
+            except Exception:
+                record_github_check_publish(settings, action="create", outcome="failure")
+                raise
+            record_github_check_publish(settings, action="create", outcome="success")
+            return result
 
     async def update_check_run(
         self, *, repository_full_name: str, check_run_id: int, request: CheckRunRequest
     ) -> CheckRunResult:
         url = f"{CHECKS_API_BASE}/repos/{repository_full_name}/check-runs/{check_run_id}"
+        settings = get_settings()
         with start_span(
             "github.check.update",
             kind="client",
@@ -119,7 +128,13 @@ class HttpxGitHubChecksClient:
                 "agentabi.head_sha": request.head_sha,
             },
         ):
-            return await self._send("PATCH", url, request)
+            try:
+                result = await self._send("PATCH", url, request)
+            except Exception:
+                record_github_check_publish(settings, action="update", outcome="failure")
+                raise
+            record_github_check_publish(settings, action="update", outcome="success")
+            return result
 
     async def _send(self, method: str, url: str, request: CheckRunRequest) -> CheckRunResult:
         token = await self.credentials.get_token()

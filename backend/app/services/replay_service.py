@@ -11,12 +11,14 @@ succeeded) comes from deterministic code (Phase 7's architectural
 boundary).
 """
 
+import time
 import uuid
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.domain.exceptions import (
     ComponentNotFound,
     ComponentVersionNotFound,
@@ -32,7 +34,7 @@ from app.domain.exceptions import (
 from app.models.project import Project
 from app.models.replay_run import ReplayRun
 from app.models.replay_step import ReplayStep
-from app.observability import start_span
+from app.observability import record_analysis_run, start_span
 from app.replay.executor import ExecutorRegistry
 from app.replay.models import ReplayPlan, ReplayStatus, StepKind, StepStatus, TrajectoryEventView
 from app.replay.planner import build_replay_plan
@@ -213,6 +215,8 @@ class ReplayService:
     async def execute_replay(self, project_id: uuid.UUID, replay_id: uuid.UUID) -> ReplayRun:
         """Phase 15 spec §14 domain span boundary."""
 
+        start = time.monotonic()
+        status = "success"
         with start_span(
             "agentabi.replay.execute",
             attributes={
@@ -220,7 +224,18 @@ class ReplayService:
                 "agentabi.replay_id": str(replay_id),
             },
         ):
-            return await self._execute_replay_impl(project_id, replay_id)
+            try:
+                return await self._execute_replay_impl(project_id, replay_id)
+            except Exception:
+                status = "failure"
+                raise
+            finally:
+                record_analysis_run(
+                    get_settings(),
+                    pipeline="replay",
+                    status=status,
+                    duration_seconds=time.monotonic() - start,
+                )
 
     async def _execute_replay_impl(self, project_id: uuid.UUID, replay_id: uuid.UUID) -> ReplayRun:
         replay_run = await self.get_replay(project_id, replay_id)
