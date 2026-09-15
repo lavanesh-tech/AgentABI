@@ -33,7 +33,7 @@ test("dashboard renders the shell and project list once authenticated", async ({
         user_id: "00000000-0000-0000-0000-000000000001",
         email: "demo@example.com",
         organization_id: "00000000-0000-0000-0000-000000000002",
-        role: "ADMIN",
+        role: "admin",
       }),
     }),
   );
@@ -75,7 +75,7 @@ test("risk result renders PASS/WARN/BLOCK with mocked API data", async ({ page }
         user_id: "u1",
         email: "demo@example.com",
         organization_id: "org1",
-        role: "ADMIN",
+        role: "admin",
       }),
     }),
   );
@@ -103,4 +103,69 @@ test("risk result renders PASS/WARN/BLOCK with mocked API data", async ({ page }
   );
   await page.goto("/risk?projectId=p1");
   await expect(page.getByText("BLOCK")).toBeVisible();
+});
+
+// Regression coverage for the OWNER role-casing bug: hasPermission()
+// silently returned false for every real backend-issued role (which is
+// always lowercase, e.g. "owner") because the frontend's OrganizationRole
+// type and permissions.ts compared against uppercase literals. This hid
+// the Create Project form from real OWNER users. These two tests pin the
+// Projects page's create-form visibility directly to the backend's
+// actual wire format, not the previously-wrong uppercase assumption.
+test("owner sees the create-project form on /projects", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("agentabi_access_token", "fake-token");
+  });
+  await page.route("**/auth/me", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        user_id: "00000000-0000-0000-0000-000000000001",
+        email: "owner@example.com",
+        organization_id: "00000000-0000-0000-0000-000000000002",
+        role: "owner",
+        requires_onboarding: false,
+      }),
+    }),
+  );
+  await page.route("**/organizations/**/projects*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0, page: 1, page_size: 100 }),
+    }),
+  );
+  await page.goto("/projects");
+  await expect(page.getByText("Create a project")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create" })).toBeVisible();
+});
+
+test("member does not see the create-project form on /projects", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.sessionStorage.setItem("agentabi_access_token", "fake-token");
+  });
+  await page.route("**/auth/me", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        user_id: "00000000-0000-0000-0000-000000000004",
+        email: "member@example.com",
+        organization_id: "00000000-0000-0000-0000-000000000002",
+        role: "member",
+        requires_onboarding: false,
+      }),
+    }),
+  );
+  await page.route("**/organizations/**/projects*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0, page: 1, page_size: 100 }),
+    }),
+  );
+  await page.goto("/projects");
+  await expect(page.getByText("Create a project")).toHaveCount(0);
+  await expect(page.getByText("Ask an organization admin to create one.")).toBeVisible();
 });
