@@ -18,6 +18,7 @@ class AuditAction(enum.StrEnum):
     LOGIN_FAILURE = "login_failure"
     AUTHORIZATION_DENIED = "authorization_denied"
     PROJECT_CREATED = "project_created"
+    ORGANIZATION_CREATED = "organization_created"
     SCAN_TRIGGERED = "scan_triggered"
     REPLAY_TRIGGERED = "replay_triggered"
     GITHUB_WEBHOOK_PROCESSED = "github_webhook_processed"

@@ -505,6 +505,20 @@ class DuplicateProject(ConflictError):
         self.slug = slug
 
 
+class OrganizationAlreadyProvisioned(ConflictError):
+    """Raised when an authenticated caller who already belongs to at
+    least one organization calls the first-organization onboarding
+    endpoint (`POST /organizations`). This endpoint only ever creates a
+    caller's *first* organization (docs/DECISIONS.md ADR-040 follow-up)
+    — it is never a general "create another organization" or "join an
+    existing organization" API, so any existing membership is a
+    conflict, not a validation error."""
+
+    def __init__(self, user_id: Any) -> None:
+        super().__init__(f"User {user_id} already belongs to an organization")
+        self.user_id = user_id
+
+
 class RateLimited(AgentABIError):
     """Raised when a request exceeds a configured rate limit (Security
     Phase D). Mapped to HTTP 429 with a `Retry-After` header — never

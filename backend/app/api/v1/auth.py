@@ -11,13 +11,16 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import get_current_user
 from app.api.deps.github_oauth import get_github_oauth_service
 from app.api.deps.rate_limit import rate_limit_by_client
 from app.auth.principal import AuthenticatedPrincipal
 from app.core.config import get_settings
+from app.core.database import get_db_session
 from app.models.organization_member import OrganizationRole
+from app.repositories.organization_member_repository import OrganizationMemberRepository
 from app.services.github_oauth_service import GitHubCallbackResult, GitHubOAuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -43,14 +46,18 @@ class AuthMeResponse(BaseModel):
     email: str
     organization_id: uuid.UUID | None
     role: OrganizationRole | None
+    requires_onboarding: bool
 
     @classmethod
-    def from_principal(cls, principal: AuthenticatedPrincipal) -> "AuthMeResponse":
+    def from_principal(
+        cls, principal: AuthenticatedPrincipal, *, requires_onboarding: bool
+    ) -> "AuthMeResponse":
         return cls(
             user_id=principal.user_id,
             email=principal.email,
             organization_id=principal.organization_id,
             role=principal.role,
+            requires_onboarding=requires_onboarding,
         )
 
 
@@ -58,13 +65,21 @@ class AuthMeResponse(BaseModel):
     "/me",
     response_model=AuthMeResponse,
     summary="Get the authenticated user",
-    description="Requires a Bearer AgentABI JWT. Returns the caller's identity and, "
-    "if the token carries organization context, their role in it.",
+    description="Requires a Bearer AgentABI JWT. Returns the caller's identity, "
+    "if the token carries organization context their role in it, and a freshly "
+    "computed `requires_onboarding` flag (true only when the caller currently has "
+    "zero organization memberships). This is deliberately recomputed from the "
+    "database on every call — unlike the one-time `requires_onboarding` returned "
+    "by the GitHub OAuth callback, an already-authenticated session (e.g. one "
+    "that predates onboarding being implemented) can use this to discover it "
+    "still needs to onboard without a fresh login.",
 )
 async def get_me(
     principal: Annotated[AuthenticatedPrincipal, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> AuthMeResponse:
-    return AuthMeResponse.from_principal(principal)
+    memberships = await OrganizationMemberRepository(session).list_for_user(principal.user_id)
+    return AuthMeResponse.from_principal(principal, requires_onboarding=len(memberships) == 0)
 
 
 class GitHubCallbackResponse(BaseModel):

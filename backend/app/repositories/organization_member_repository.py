@@ -32,3 +32,6 @@ class OrganizationMemberRepository:
         (see `app/services/github_oauth_service.py`)."""
         stmt = select(OrganizationMember).where(OrganizationMember.user_id == user_id)
         return (await self._session.execute(stmt)).scalars().all()
+
+    def add(self, member: OrganizationMember) -> None:
+        self._session.add(member)

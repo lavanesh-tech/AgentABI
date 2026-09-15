@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     rate_limit_mutation_window_seconds: int = 60
     rate_limit_scan_replay_requests: int = 10
     rate_limit_scan_replay_window_seconds: int = 60
+    # First-organization onboarding (`POST /organizations`) is a rare,
+    # one-time-per-user action — a tight, conservative limit (mirrors
+    # rate_limit_auth_requests) is appropriate; it is not a bulk-creation
+    # API and never will be (see OrganizationAlreadyProvisioned).
+    rate_limit_onboarding_requests: int = 5
+    rate_limit_onboarding_window_seconds: int = 60
     # Fail-closed is the single, non-configurable policy: if Redis can't
     # be reached to evaluate a limit, the request is denied (503) rather
     # than silently let through unchecked. See docs/DECISIONS.md — this

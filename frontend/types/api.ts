@@ -40,6 +40,10 @@ export interface AuthMeResponse {
   email: string;
   organization_id: string | null;
   role: OrganizationRole | null;
+  /** Freshly recomputed on every `/auth/me` call — true only when the
+   * caller currently has zero organization memberships. Authoritative,
+   * unlike relying solely on the one-time OAuth callback flag. */
+  requires_onboarding: boolean;
 }
 
 export interface GitHubCallbackResponse {
@@ -50,6 +54,21 @@ export interface GitHubCallbackResponse {
   organization_id: string | null;
   role: OrganizationRole | null;
   requires_onboarding: boolean;
+}
+
+// ---- organizations -----------------------------------------------------
+
+export interface OrganizationCreateRequest {
+  name: string;
+}
+
+export interface OrganizationOnboardingResponse {
+  access_token: string;
+  token_type: string;
+  organization_id: string;
+  organization_name: string;
+  organization_slug: string;
+  role: OrganizationRole;
 }
 
 // ---- projects -----------------------------------------------------------

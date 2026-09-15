@@ -27,7 +27,11 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { apiClient, registerUnauthorizedHandler } from "@/lib/api-client";
 import { clearStoredToken, getStoredToken, setStoredToken } from "@/lib/auth-storage";
-import type { AuthMeResponse, GitHubCallbackResponse } from "@/types/api";
+import type {
+  AuthMeResponse,
+  GitHubCallbackResponse,
+  OrganizationOnboardingResponse,
+} from "@/types/api";
 
 interface AuthContextValue {
   user: AuthMeResponse | null;
@@ -38,6 +42,12 @@ interface AuthContextValue {
   logout: () => void;
   /** Called only by /auth/callback once it has exchanged the code. */
   completeLogin: (result: GitHubCallbackResponse) => void;
+  /** Called only by /onboarding once `POST /organizations` succeeds.
+   * Stores the fresh, organization-scoped JWT the backend just issued,
+   * then reloads `/auth/me` so `user` (role, organization_id) is always
+   * the server's own view — never assembled client-side from the
+   * onboarding response alone. */
+  completeOnboarding: (result: OrganizationOnboardingResponse) => Promise<void>;
   refresh: () => Promise<void>;
 }
 
@@ -92,8 +102,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email: result.email,
       organization_id: result.organization_id,
       role: result.role,
+      requires_onboarding: result.requires_onboarding,
     });
   }, []);
+
+  const completeOnboarding = useCallback(
+    async (result: OrganizationOnboardingResponse) => {
+      setStoredToken(result.access_token);
+      await refresh();
+    },
+    [refresh],
+  );
 
   const logout = useCallback(() => {
     // No backend logout route (stateless JWT, per spec §8) — clearing
@@ -109,9 +128,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginWithGitHub,
       logout,
       completeLogin,
+      completeOnboarding,
       refresh,
     }),
-    [user, isLoading, loginWithGitHub, logout, completeLogin, refresh],
+    [user, isLoading, loginWithGitHub, logout, completeLogin, completeOnboarding, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

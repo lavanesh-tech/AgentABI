@@ -2,6 +2,70 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-084 — First-organization onboarding: authenticated self-service `POST /organizations`, not DB seeding, a CLI, or admin-only bootstrap (supersedes ADR-040's deferred item) (2026-09-15)
+
+**Context:** ADR-040 deliberately left a gap open: a GitHub-authenticated
+user with zero `OrganizationMember` rows gets a valid AgentABI JWT with
+`organization_id=None` and `requires_onboarding=True`, but nothing in
+the codebase could ever turn that into an actual organization —
+every org-scoped route (`app/api/deps/authz.py`'s
+`require_organization_permission`/`require_project_permission`) requires
+an *existing* organization to check membership against. A real local
+user authenticated via GitHub OAuth and got stuck exactly here: zero
+memberships, no route able to create the first one. Local verification
+confirmed this by direct inspection of every model/repository/service/
+route/migration/script/test/Postman file — no seeding script, CLI, or
+admin-only bootstrap mechanism existed anywhere.
+
+**Decision:** Close the gap with `POST /api/v1/organizations`
+(`app/api/v1/organizations.py`), gated purely on "the authenticated
+caller currently has zero organization memberships" — reloaded from the
+database inside a locked transaction on every call, never trusted from
+the JWT or the request body. A successful call atomically creates one
+`Organization` and one `OrganizationMember(role=OWNER)` for the caller,
+records an `AuditAction.ORGANIZATION_CREATED` event, and returns a fresh
+AgentABI JWT carrying the new `organization_id` (still with no `role`
+claim — authorization continues to reload role from `OrganizationMember`
+on every request, exactly as before). `GET /auth/me` now also returns a
+freshly recomputed `requires_onboarding` flag (not just the one-time
+`GitHubCallbackResponse` field), so an already-authenticated session —
+including one that predates this feature — discovers it needs to
+onboard on its next `/auth/me` refresh rather than being stuck.
+
+Three alternatives were rejected:
+
+- **Raw database seeding / manual `INSERT`.** Not a supported product
+  flow at all — it doesn't scale past one developer's local machine,
+  requires direct DB access the frontend/API can never have in a real
+  deployment, and leaves no audit trail.
+- **A local-only CLI/management command.** Solves the developer's
+  immediate local problem but not the actual product gap: a real
+  deployed user hitting this same zero-membership state has no shell
+  access to run a CLI. It would need to be reimplemented as an API
+  endpoint eventually anyway.
+- **An admin-only bootstrap endpoint.** Wrong shape for this specific
+  gap — there is no pre-existing admin/OWNER role anywhere for a
+  brand-new tenant to be bootstrapped *by*; requiring one begs the
+  question. Onboarding must be something the orgless user themselves can
+  do, authenticated only as themselves.
+
+Authenticated self-service onboarding is the smallest fix that works
+identically for the local developer and a real production sign-up: the
+same authorization invariant (reload membership from the database, only
+ever grant OWNER for a newly created organization, never let the client
+assert a role/org id/other user's id) holds in both environments,
+because it's the same code path.
+
+**Concurrency:** the DB-level `uq_organization_members_org_user`
+constraint prevents a user from getting two memberships in the *same*
+organization but does nothing to stop two concurrent onboarding
+requests for the same user from each observing zero memberships and
+each creating a *different* new organization. `OrganizationRepository.
+lock_user_for_onboarding` takes a `SELECT ... FOR UPDATE` lock on the
+caller's own `User` row before the membership check, serializing
+concurrent onboarding attempts for that one user without locking
+anything that could block a different user's request.
+
 ## ADR-083 — Frontend dark mode: `data-theme` attribute stays the single source of truth; Tailwind's `darkMode` config fixed to match it (2026-09-15)
 
 The frontend UI/UX polish checkpoint added a light/dark/system

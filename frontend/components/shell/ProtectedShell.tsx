@@ -12,7 +12,7 @@ import { LoadingBlock } from "@/components/ui/primitives";
  * meantime. Sidebar is a fixed column at md+ widths and an off-canvas
  * drawer below that (spec §3/§14 responsive behavior). */
 export function ProtectedShell({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const [navOpen, setNavOpen] = useState(false);
@@ -23,12 +23,24 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
     }
   }, [isLoading, isAuthenticated, router]);
 
+  // An authenticated but orgless user (zero memberships, per the
+  // authoritative `requires_onboarding` flag reloaded from the database
+  // on every `/auth/me` call — not just the one-time OAuth callback
+  // flag) must onboard before any org-scoped page is usable. Covers the
+  // pre-existing-session case too: a session created before onboarding
+  // existed still gets caught here on its next `/auth/me` refresh.
+  useEffect(() => {
+    if (!isLoading && isAuthenticated && user?.requires_onboarding) {
+      router.replace("/onboarding");
+    }
+  }, [isLoading, isAuthenticated, user, router]);
+
   // Close the mobile drawer automatically on navigation.
   useEffect(() => {
     setNavOpen(false);
   }, [pathname]);
 
-  if (isLoading || !isAuthenticated) {
+  if (isLoading || !isAuthenticated || user?.requires_onboarding) {
     return (
       <div className="flex h-screen items-center justify-center bg-surface">
         <LoadingBlock />
