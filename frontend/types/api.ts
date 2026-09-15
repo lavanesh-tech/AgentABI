@@ -33,7 +33,15 @@ export interface ApiErrorEnvelope {
 
 // ---- auth -------------------------------------------------------------
 
-export type OrganizationRole = "MEMBER" | "ADMIN" | "OWNER";
+// Matches the backend's actual wire format exactly: `OrganizationRole`
+// (backend/app/models/organization_member.py) is a Python `StrEnum`
+// with lowercase values ("owner"/"admin"/"member"), and every response
+// model that exposes `role` (AuthMeResponse, GitHubCallbackResponse,
+// OrganizationOnboardingResponse) serializes that enum's `.value` as-is
+// — never uppercased. This type previously declared the uppercase
+// literals below, which silently broke every hasPermission() check for
+// real backend-issued tokens (see docs/DECISIONS.md).
+export type OrganizationRole = "member" | "admin" | "owner";
 
 export interface AuthMeResponse {
   user_id: string;

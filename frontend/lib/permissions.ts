@@ -70,8 +70,8 @@ const OWNER_PERMISSIONS = new Set<Permission>([
 
 export function hasPermission(role: OrganizationRole | null, permission: Permission): boolean {
   if (!role) return false;
-  if (role === "OWNER") return OWNER_PERMISSIONS.has(permission);
-  if (role === "ADMIN") return ADMIN_PERMISSIONS.has(permission);
-  if (role === "MEMBER") return MEMBER_PERMISSIONS.has(permission);
+  if (role === "owner") return OWNER_PERMISSIONS.has(permission);
+  if (role === "admin") return ADMIN_PERMISSIONS.has(permission);
+  if (role === "member") return MEMBER_PERMISSIONS.has(permission);
   return false;
 }
