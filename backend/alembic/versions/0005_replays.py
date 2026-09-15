@@ -17,13 +17,20 @@ down_revision: str | None = "0004"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_replay_status = postgresql.ENUM("pending", "running", "completed", "failed", name="replay_status")
+# create_type=False on all three: see 0001_initial_schema.py's
+# _organization_role comment — without it, the op.create_table() calls
+# below would each auto-CREATE TYPE a second time, duplicating the
+# explicit .create() calls further down.
+_replay_status = postgresql.ENUM(
+    "pending", "running", "completed", "failed", name="replay_status", create_type=False
+)
 _replay_step_kind = postgresql.ENUM(
     "reused_evidence",
     "substituted_execution",
     "provider_execution_required",
     "skipped",
     name="replay_step_kind",
+    create_type=False,
 )
 _replay_step_status = postgresql.ENUM(
     "pending",
@@ -33,6 +40,7 @@ _replay_step_status = postgresql.ENUM(
     "skipped",
     "provider_required",
     name="replay_step_status",
+    create_type=False,
 )
 
 # `replay_steps` is append-only replay evidence, same posture as

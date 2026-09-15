@@ -17,6 +17,12 @@ down_revision: str | None = "0001"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# create_type=False on both: see 0001_initial_schema.py's
+# _organization_role comment — without it, op.create_table("components",
+# ...)/op.create_table("component_versions", ...) below would each try
+# to auto-CREATE TYPE a second time for whichever of these two enums
+# they use as a column type, duplicating the explicit .create() calls
+# further down and raising DuplicateObjectError.
 _component_type = postgresql.ENUM(
     "agent",
     "prompt",
@@ -29,8 +35,11 @@ _component_type = postgresql.ENUM(
     "workflow",
     "policy",
     name="component_type",
+    create_type=False,
 )
-_component_status = postgresql.ENUM("active", "deprecated", "archived", name="component_status")
+_component_status = postgresql.ENUM(
+    "active", "deprecated", "archived", name="component_status", create_type=False
+)
 
 # Database-level backstop for version immutability: even a write that
 # bypasses the ORM/service layer entirely cannot change a version's

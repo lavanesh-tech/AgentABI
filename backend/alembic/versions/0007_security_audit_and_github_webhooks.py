@@ -17,6 +17,10 @@ down_revision: str | None = "0006"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# create_type=False on both: see 0001_initial_schema.py's
+# _organization_role comment — without it, the op.create_table() calls
+# below would each auto-CREATE TYPE a second time, duplicating the
+# explicit .create() calls further down.
 _audit_action = postgresql.ENUM(
     "login_success",
     "login_failure",
@@ -27,9 +31,10 @@ _audit_action = postgresql.ENUM(
     "github_webhook_processed",
     "github_webhook_rejected",
     name="audit_action",
+    create_type=False,
 )
 _webhook_delivery_status = postgresql.ENUM(
-    "processed", "rejected", name="github_webhook_delivery_status"
+    "processed", "rejected", name="github_webhook_delivery_status", create_type=False
 )
 
 # audit_events is append-only evidence of security-relevant actions —

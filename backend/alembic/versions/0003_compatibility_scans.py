@@ -17,14 +17,28 @@ down_revision: str | None = "0002"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+# create_type=False on all three: see 0001_initial_schema.py's
+# _organization_role comment — without it, the op.create_table() calls
+# below would each auto-CREATE TYPE a second time, duplicating the
+# explicit .create() calls further down.
 _compatibility_status = postgresql.ENUM(
-    "compatible", "warning", "breaking", name="compatibility_status"
+    "compatible", "warning", "breaking", name="compatibility_status", create_type=False
 )
 _compatibility_classification = postgresql.ENUM(
-    "compatible", "potentially_breaking", "breaking", name="compatibility_classification"
+    "compatible",
+    "potentially_breaking",
+    "breaking",
+    name="compatibility_classification",
+    create_type=False,
 )
 _compatibility_severity = postgresql.ENUM(
-    "info", "low", "medium", "high", "critical", name="compatibility_severity"
+    "info",
+    "low",
+    "medium",
+    "high",
+    "critical",
+    name="compatibility_severity",
+    create_type=False,
 )
 
 # A compatibility scan (and its changes) is evidence for a release

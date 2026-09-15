@@ -17,7 +17,18 @@ down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_organization_role = postgresql.ENUM("owner", "admin", "member", name="organization_role")
+# create_type=False: without it, postgresql.ENUM registers its own
+# before_create/after_drop events on any table that uses it as a column
+# type, so op.create_table("organization_members", ...) below would try
+# to CREATE TYPE organization_role a second time (checkfirst=False on
+# that auto-triggered path, unlike the explicit .create() call two lines
+# down) and fail with DuplicateObjectError even though the two creates
+# are for the exact same type. create_type=False makes the explicit
+# .create(bind, checkfirst=True) call the single, sole place this type
+# is ever created or dropped.
+_organization_role = postgresql.ENUM(
+    "owner", "admin", "member", name="organization_role", create_type=False
+)
 
 
 def upgrade() -> None:
