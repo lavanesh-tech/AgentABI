@@ -2,6 +2,32 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-080 — every explicitly-created PostgreSQL enum uses `create_type=False` (2026-09-15)
+
+Real local verification: a fresh `alembic upgrade head` failed on 0001
+with `asyncpg.exceptions.DuplicateObjectError: type "organization_role"
+already exists`, even against an empty database. `postgresql.ENUM(...)`
+defaults to `create_type=True`, which registers its own automatic
+`CREATE TYPE`/`DROP TYPE` on any table that uses it as a column type —
+0001 already created `organization_role` explicitly
+(`_organization_role.create(bind, checkfirst=True)`) before using it in
+`op.create_table("organization_members", ...)`, so that table's own
+automatic create fired a second, `checkfirst=False` `CREATE TYPE` for
+the same name and collided with the one that had just succeeded, all
+inside the same (Alembic-managed, transactional) migration.
+
+The same pattern — a module-level `postgresql.ENUM(...)` explicitly
+`.create()`'d, then reused as a column type — was already present in
+migrations 0002, 0003, 0004, 0005, and 0007, so all thirteen enum
+declarations across those five files got the same fix, not just 0001's.
+Migration design rule going forward: any migration that explicitly
+creates/drops a PostgreSQL enum (rather than relying solely on the
+automatic table-triggered create) must declare it with
+`create_type=False`, making the explicit `.create()`/`.drop()` calls the
+one and only place that type is ever created or dropped. Enforced by
+`tests/test_migration_enum_creation.py`, which fails if a future
+migration explicitly `.create()`s an enum without `create_type=False`.
+
 ## ADR-079 — API image packages `alembic.ini`/`alembic/` alongside `app/` (2026-09-15)
 
 Real local verification: `docker compose exec api alembic upgrade head`

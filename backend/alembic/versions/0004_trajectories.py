@@ -17,7 +17,13 @@ down_revision: str | None = "0003"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_trajectory_status = postgresql.ENUM("running", "completed", "failed", name="trajectory_status")
+# create_type=False on both: see 0001_initial_schema.py's
+# _organization_role comment — without it, the op.create_table() calls
+# below would each auto-CREATE TYPE a second time, duplicating the
+# explicit .create() calls further down.
+_trajectory_status = postgresql.ENUM(
+    "running", "completed", "failed", name="trajectory_status", create_type=False
+)
 _trajectory_event_type = postgresql.ENUM(
     "run_started",
     "run_completed",
@@ -38,6 +44,7 @@ _trajectory_event_type = postgresql.ENUM(
     "structured_output",
     "error",
     name="trajectory_event_type",
+    create_type=False,
 )
 
 # `trajectory_events` is append-only historical evidence, same posture as
