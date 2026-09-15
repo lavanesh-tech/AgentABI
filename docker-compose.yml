@@ -202,7 +202,14 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./observability/grafana/dashboards:/etc/grafana/provisioning/dashboards/files:ro
+      # Deliberately NOT /etc/grafana/provisioning/dashboards/files — that
+      # path is nested inside the read-only mount directly above, and
+      # Docker can't create a mountpoint inside an already-mounted
+      # read-only filesystem ("read-only file system" on `docker compose
+      # up`). A conventional, non-nested sibling path under /etc/grafana
+      # instead — both mounts attach directly to the image's own
+      # /etc/grafana directory, neither nested inside the other.
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     ports:
       - "3001:3000" # host 3001 — 3000 is already the frontend (`web`)

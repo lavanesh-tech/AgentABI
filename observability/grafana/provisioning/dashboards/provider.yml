@@ -1,5 +1,12 @@
 # Phase 16 — auto-loads every dashboard JSON file under
 # observability/grafana/dashboards/ at Grafana startup (spec §29/§30).
+#
+# `path` below is intentionally NOT nested under /etc/grafana/provisioning
+# (this file's own directory) — docker-compose.yml mounts the dashboards
+# directory read-only at a sibling path, /etc/grafana/dashboards, because
+# a bind mount nested inside another already-mounted read-only bind mount
+# fails ("read-only file system") when Docker can't create the nested
+# mountpoint. Keep this `path` and docker-compose.yml's target in sync.
 apiVersion: 1
 
 providers:
@@ -10,4 +17,4 @@ providers:
     disableDeletion: false
     updateIntervalSeconds: 30
     options:
-      path: /etc/grafana/provisioning/dashboards/files
+      path: /etc/grafana/dashboards
