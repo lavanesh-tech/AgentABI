@@ -2,6 +2,20 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-077 — `apache/kafka` healthcheck needs the absolute script path; it isn't on PATH (2026-09-15)
+
+Real Docker verification of ADR-076's `apache/kafka:3.8.0` switch found
+the broker itself started fine (`Kafka Server started` in logs) but
+Compose marked it unhealthy: `/bin/sh: kafka-topics.sh: not found`
+(exit 127). Unlike Bitnami's image, `apache/kafka` does not add
+`$KAFKA_HOME/bin` to `PATH`, so the bare command name that worked under
+Bitnami doesn't resolve here. Fixed by calling the script at its
+absolute path, `/opt/kafka/bin/kafka-topics.sh`. The command itself is
+unchanged (`--bootstrap-server localhost:9092 --list`) — it was already
+a real metadata request against the broker's internal listener, not a
+bare process check, so no change was needed to what the healthcheck
+actually verifies, only to how it invokes the CLI.
+
 ## ADR-076 — Switch local Kafka image from `bitnami/kafka` to `apache/kafka` (supersedes ADR-001) (2026-09-15)
 
 Real local Docker verification found `bitnami/kafka:3.8` unresolvable
