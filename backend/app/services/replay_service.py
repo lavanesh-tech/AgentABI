@@ -280,7 +280,6 @@ class ReplayService:
             event_type = EventType(step["event_type"])
             executor = self._executors.find(event_type)
             if executor is None:
-                await self._session.flush()
                 await self._replays.transition_status(
                     replay_id,
                     from_status=ReplayStatus.RUNNING,
@@ -288,6 +287,14 @@ class ReplayService:
                     error=f"no executor available for event_type={event_type!r}",
                     completed_at_now=True,
                 )
+                # Commit here, not just flush: `app.core.database.get_db_session`
+                # rolls back the whole request session on any exception,
+                # including this deliberately-raised domain one. ADR-034
+                # requires the FAILED transition (and the evidence steps
+                # already added above) to stay consistent even though the
+                # request itself ends in an error response — that can only
+                # be true if this write is durable before we raise.
+                await self._session.commit()
                 raise ReplayExecutorUnavailable(replay_id, event_type)
 
             try:
@@ -299,7 +306,6 @@ class ReplayService:
             except Exception as exc:  # noqa: BLE001 - deliberately broad: any executor
                 # failure, not just a domain one, must not crash the replay
                 # in an inconsistent state (Phase 7 §11).
-                await self._session.flush()
                 await self._replays.transition_status(
                     replay_id,
                     from_status=ReplayStatus.RUNNING,
@@ -307,6 +313,11 @@ class ReplayService:
                     error=str(exc),
                     completed_at_now=True,
                 )
+                # See the matching comment in the "no executor available"
+                # branch above: commit, not flush, so ADR-034's "state
+                # stays consistent" guarantee survives the request-level
+                # rollback that `get_db_session` performs on any exception.
+                await self._session.commit()
                 raise ReplayExecutionFailed(replay_id, str(exc)) from exc
 
             status = StepStatus.EXECUTED if outcome.status == "executed" else StepStatus.FAILED
