@@ -261,6 +261,130 @@ async def test_create_replay_requires_completed_trajectory(session):
         )
 
 
+# --- step_count regression coverage (MissingGreenlet fix) ---------------
+#
+# These pin down that `ReplayService.count_steps`/`count_steps_for_replays`
+# are the only source of `step_count` in `ReplayResponse` — never
+# `len(replay_run.steps)`, which is an async-lazy SQLAlchemy relationship.
+# Before the fix, `ReplayResponse.from_replay` accessed it directly and
+# could raise `sqlalchemy.exc.MissingGreenlet` when called with a
+# `ReplayRun` whose `steps` relationship wasn't (or was no longer) loaded.
+
+
+async def test_count_steps_is_zero_before_execution(session):
+    project, component, v5, v6 = await _setup(session)
+    trajectory = await _checkout_run(session, project, component, v5)
+    service = ReplayService(session)
+    replay = await service.create_replay(
+        project.id,
+        source_trajectory_id=trajectory.id,
+        baseline_component_version_id=v5.id,
+        candidate_component_version_id=v6.id,
+    )
+    await session.commit()
+
+    assert await service.count_steps(replay.id) == 0
+
+
+async def test_count_steps_matches_persisted_steps_after_successful_execution(session):
+    project, component, v5, v6 = await _setup(session)
+    trajectory = await _checkout_run(session, project, component, v5)
+
+    fake = FakeReplayExecutor(
+        responses={
+            (EventType.TOOL_CALL, v6.id): ExecutionOutcome(
+                status="executed", output={"authorized": True, "authorization_id": "auth-999"}
+            )
+        }
+    )
+    service = ReplayService(session, executor_registry=ExecutorRegistry([fake]))
+    replay = await service.create_replay(
+        project.id,
+        source_trajectory_id=trajectory.id,
+        baseline_component_version_id=v5.id,
+        candidate_component_version_id=v6.id,
+    )
+    await session.commit()
+    executed = await service.execute_replay(project.id, replay.id)
+    await session.commit()
+
+    # Every step in a fully-executed plan is persisted — count_steps must
+    # match both the plan length and the actual listed rows, computed via
+    # an explicit query rather than the (unloaded, expired-by-refresh)
+    # `steps` relationship on `executed`.
+    step_count = await service.count_steps(replay.id)
+    assert step_count == len(executed.plan)
+    listed = await service.list_steps(project.id, replay.id)
+    assert step_count == listed.total
+
+
+async def test_count_steps_matches_persisted_steps_after_failed_execution(session):
+    from app.domain.exceptions import ReplayExecutorUnavailable
+
+    project, component, v5, v6 = await _setup(session)
+    trajectory = await _checkout_run(session, project, component, v5)
+    service = ReplayService(session)
+    replay = await service.create_replay(
+        project.id,
+        source_trajectory_id=trajectory.id,
+        baseline_component_version_id=v5.id,
+        candidate_component_version_id=v6.id,
+    )
+    await session.commit()
+
+    with pytest.raises(ReplayExecutorUnavailable):
+        await service.execute_replay(project.id, replay.id)
+    await session.commit()
+
+    # Steps ahead of the unexecutable substituted step were persisted
+    # before the failure; count_steps must reflect exactly those, agreeing
+    # with list_steps, without touching the ORM relationship.
+    step_count = await service.count_steps(replay.id)
+    listed = await service.list_steps(project.id, replay.id)
+    assert step_count == listed.total
+    assert step_count < len(replay.plan)
+
+
+async def test_count_steps_for_replays_batches_multiple_runs(session):
+    project, component, v5, v6 = await _setup(session)
+    trajectory_a = await _checkout_run(session, project, component, v5)
+    trajectory_b = await _checkout_run(session, project, component, v5)
+
+    fake = FakeReplayExecutor(
+        responses={
+            (EventType.TOOL_CALL, v6.id): ExecutionOutcome(
+                status="executed", output={"authorized": True, "authorization_id": "auth-999"}
+            )
+        }
+    )
+    service = ReplayService(session, executor_registry=ExecutorRegistry([fake]))
+
+    executed_replay = await service.create_replay(
+        project.id,
+        source_trajectory_id=trajectory_a.id,
+        baseline_component_version_id=v5.id,
+        candidate_component_version_id=v6.id,
+    )
+    await session.commit()
+    executed_replay = await service.execute_replay(project.id, executed_replay.id)
+    await session.commit()
+
+    pending_replay = await service.create_replay(
+        project.id,
+        source_trajectory_id=trajectory_b.id,
+        baseline_component_version_id=v5.id,
+        candidate_component_version_id=v6.id,
+    )
+    await session.commit()
+
+    counts = await service.count_steps_for_replays([executed_replay.id, pending_replay.id])
+    assert counts[executed_replay.id] == len(executed_replay.plan)
+    assert counts.get(pending_replay.id, 0) == 0
+
+    # Empty input never issues a query with an empty IN(...) clause.
+    assert await service.count_steps_for_replays([]) == {}
+
+
 async def test_cross_project_isolation_for_replay_creation(session):
     from app.domain.exceptions import TrajectoryNotFound
 

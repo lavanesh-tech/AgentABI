@@ -13,6 +13,7 @@ boundary).
 
 import time
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -188,6 +189,23 @@ class ReplayService:
         if replay_run is None:
             raise ReplayNotFound(replay_id)
         return replay_run
+
+    async def count_steps(self, replay_run_id: uuid.UUID) -> int:
+        """Explicit step count for one replay run — see
+        `ReplayRepository.count_steps`'s docstring for why this is
+        never derived from `ReplayRun.steps` at the API layer. Callers
+        must already have established `replay_run_id` belongs to the
+        caller's project (e.g. via a prior `get_replay`/`create_replay`/
+        `execute_replay` call) — this method does no tenant check of
+        its own, matching every other thin repository delegate in this
+        service."""
+
+        return await self._replays.count_steps(replay_run_id)
+
+    async def count_steps_for_replays(
+        self, replay_run_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        return await self._replays.count_steps_for_replays(replay_run_ids)
 
     async def list_replays(
         self,
