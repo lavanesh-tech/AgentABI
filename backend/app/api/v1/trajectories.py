@@ -103,7 +103,19 @@ class TrajectoryResponse(BaseModel):
     event_count: int
 
     @classmethod
-    def from_trajectory(cls, trajectory: Trajectory) -> "TrajectoryResponse":
+    def from_trajectory(cls, trajectory: Trajectory, *, event_count: int) -> "TrajectoryResponse":
+        """`event_count` is always supplied by the caller from an explicit
+        `TrajectoryRecorderService.count_events(...)` query — never
+        derived here from `trajectory.events`. That relationship is not
+        reliably loaded on every `Trajectory` instance this is called
+        with (a freshly inserted trajectory, one returned by the
+        idempotent external_run_id retry path, or one whose attributes
+        were just expired by `session.refresh()` after a status
+        transition all reach this method), and touching an unloaded
+        relationship under async SQLAlchemy raises `MissingGreenlet`
+        instead of transparently lazy-loading like sync SQLAlchemy does.
+        See docs/DECISIONS.md."""
+
         duration_seconds = None
         if trajectory.completed_at is not None:
             duration_seconds = (trajectory.completed_at - trajectory.started_at).total_seconds()
@@ -125,7 +137,7 @@ class TrajectoryResponse(BaseModel):
             started_at=trajectory.started_at,
             completed_at=trajectory.completed_at,
             duration_seconds=duration_seconds,
-            event_count=len(trajectory.events),
+            event_count=event_count,
         )
 
 
@@ -221,7 +233,10 @@ async def start_trajectory(
         tags=payload.tags,
         metadata=payload.metadata,
     )
-    return TrajectoryResponse.from_trajectory(trajectory)
+    # Not hardcoded to 0: the idempotent external_run_id retry path can
+    # return a pre-existing trajectory that already has events.
+    event_count = await service.count_events(trajectory.id)
+    return TrajectoryResponse.from_trajectory(trajectory, event_count=event_count)
 
 
 @router.get("", response_model=TrajectoryListResponse, dependencies=[_READ])
@@ -235,8 +250,14 @@ async def list_trajectories(
     result = await service.list_trajectories(
         project_id, status=status_filter, page=page, page_size=page_size
     )
+    # One grouped COUNT query for the whole page, not one per trajectory
+    # (and never `len(t.events)`, which isn't eagerly loaded here).
+    counts = await service.count_events_for_trajectories([t.id for t in result.items])
     return TrajectoryListResponse(
-        items=[TrajectoryResponse.from_trajectory(t) for t in result.items],
+        items=[
+            TrajectoryResponse.from_trajectory(t, event_count=counts.get(t.id, 0))
+            for t in result.items
+        ],
         total=result.total,
         page=result.page,
         page_size=result.page_size,
@@ -248,7 +269,8 @@ async def get_trajectory(
     project_id: uuid.UUID, trajectory_id: uuid.UUID, service: ServiceDep
 ) -> TrajectoryResponse:
     trajectory = await service.get_trajectory(project_id, trajectory_id)
-    return TrajectoryResponse.from_trajectory(trajectory)
+    event_count = await service.count_events(trajectory_id)
+    return TrajectoryResponse.from_trajectory(trajectory, event_count=event_count)
 
 
 @router.post(
@@ -307,7 +329,8 @@ async def complete_trajectory(
     project_id: uuid.UUID, trajectory_id: uuid.UUID, service: ServiceDep
 ) -> TrajectoryResponse:
     trajectory = await service.complete_trajectory(project_id, trajectory_id)
-    return TrajectoryResponse.from_trajectory(trajectory)
+    event_count = await service.count_events(trajectory_id)
+    return TrajectoryResponse.from_trajectory(trajectory, event_count=event_count)
 
 
 @router.post("/{trajectory_id}/fail", response_model=TrajectoryResponse, dependencies=[_WRITE])
@@ -318,4 +341,5 @@ async def fail_trajectory(
     service: ServiceDep,
 ) -> TrajectoryResponse:
     trajectory = await service.fail_trajectory(project_id, trajectory_id, error=payload.error)
-    return TrajectoryResponse.from_trajectory(trajectory)
+    event_count = await service.count_events(trajectory_id)
+    return TrajectoryResponse.from_trajectory(trajectory, event_count=event_count)

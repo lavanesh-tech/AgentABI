@@ -238,3 +238,101 @@ async def test_redaction_visible_in_retrieved_representation(client, session):
     assert stored_input["nested"]["api_key"] == "***REDACTED***"
     assert "very-secret-token" not in fetched.text
     assert "secret-value" not in fetched.text
+
+
+# --- event_count regression coverage (MissingGreenlet fix) --------------
+#
+# These pin down that `event_count` in every `TrajectoryResponse` is
+# computed with an explicit COUNT query rather than by touching the
+# async-lazy `Trajectory.events` relationship. Before the fix, several of
+# these paths raised `sqlalchemy.exc.MissingGreenlet` instead of the
+# assertions below ever running.
+
+
+async def test_event_count_reflects_appended_events(client, session):
+    project = await _make_project(session)
+    start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
+    trajectory_id = start.json()["id"]
+    assert start.json()["event_count"] == 0
+
+    for event_type in ("run_started", "agent_started"):
+        response = await client.post(
+            f"/api/v1/projects/{project.id}/trajectories/{trajectory_id}/events",
+            json={"event_type": event_type},
+        )
+        assert response.status_code == 201
+
+    fetched = await client.get(f"/api/v1/projects/{project.id}/trajectories/{trajectory_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["event_count"] == 2
+
+
+async def test_list_trajectories_reports_correct_event_count_per_item(client, session):
+    project = await _make_project(session)
+    empty = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
+    populated = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
+    populated_id = populated.json()["id"]
+    for event_type in ("run_started", "agent_started", "agent_completed"):
+        response = await client.post(
+            f"/api/v1/projects/{project.id}/trajectories/{populated_id}/events",
+            json={"event_type": event_type},
+        )
+        assert response.status_code == 201
+
+    listed = await client.get(
+        f"/api/v1/projects/{project.id}/trajectories", params={"page_size": 100}
+    )
+    assert listed.status_code == 200
+    by_id = {item["id"]: item["event_count"] for item in listed.json()["items"]}
+    assert by_id[empty.json()["id"]] == 0
+    assert by_id[populated_id] == 3
+
+
+async def test_complete_trajectory_reports_correct_event_count(client, session):
+    project = await _make_project(session)
+    start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
+    trajectory_id = start.json()["id"]
+    await client.post(
+        f"/api/v1/projects/{project.id}/trajectories/{trajectory_id}/events",
+        json={"event_type": "run_started"},
+    )
+
+    response = await client.post(
+        f"/api/v1/projects/{project.id}/trajectories/{trajectory_id}/complete"
+    )
+    assert response.status_code == 200
+    assert response.json()["event_count"] == 1
+
+
+async def test_fail_trajectory_reports_correct_event_count(client, session):
+    project = await _make_project(session)
+    start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
+    trajectory_id = start.json()["id"]
+    for event_type in ("run_started", "agent_started"):
+        await client.post(
+            f"/api/v1/projects/{project.id}/trajectories/{trajectory_id}/events",
+            json={"event_type": event_type},
+        )
+
+    response = await client.post(
+        f"/api/v1/projects/{project.id}/trajectories/{trajectory_id}/fail",
+        json={"error": "downstream timeout"},
+    )
+    assert response.status_code == 200
+    assert response.json()["event_count"] == 2
+
+
+async def test_idempotent_retry_reports_existing_event_count(client, session):
+    project = await _make_project(session)
+    payload = {"external_run_id": "run-1", "environment": "production"}
+    first = await client.post(f"/api/v1/projects/{project.id}/trajectories", json=payload)
+    trajectory_id = first.json()["id"]
+    await client.post(
+        f"/api/v1/projects/{project.id}/trajectories/{trajectory_id}/events",
+        json={"event_type": "run_started"},
+    )
+
+    retry = await client.post(f"/api/v1/projects/{project.id}/trajectories", json=payload)
+    assert retry.status_code == 201
+    assert retry.json()["id"] == trajectory_id
+    assert retry.json()["event_count"] == 1
