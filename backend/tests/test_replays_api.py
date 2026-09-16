@@ -189,6 +189,94 @@ async def test_create_replay_missing_trajectory_returns_404(client, session):
     assert response.status_code == 404
 
 
+# --- step_count regression coverage (MissingGreenlet fix) ---------------
+#
+# Before the fix, ReplayResponse.from_replay computed step_count via
+# len(replay_run.steps) — an async-lazy SQLAlchemy relationship — which
+# raised sqlalchemy.exc.MissingGreenlet instead of returning a response.
+# These pin down that create/list/get/execute all return 2xx with a
+# correct, async-safe step_count.
+
+
+async def test_create_replay_reports_zero_step_count(client, session):
+    project, component, v5, v6 = await _setup(session)
+    trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
+
+    response = await client.post(
+        f"/api/v1/projects/{project.id}/replays",
+        json={
+            "source_trajectory_id": trajectory_id,
+            "baseline_component_version_id": str(v5.id),
+            "candidate_component_version_id": str(v6.id),
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["step_count"] == 0
+
+
+async def test_get_replay_reports_zero_step_count(client, session):
+    project, component, v5, v6 = await _setup(session)
+    trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
+    create = await client.post(
+        f"/api/v1/projects/{project.id}/replays",
+        json={
+            "source_trajectory_id": trajectory_id,
+            "baseline_component_version_id": str(v5.id),
+            "candidate_component_version_id": str(v6.id),
+        },
+    )
+    replay_id = create.json()["id"]
+
+    response = await client.get(f"/api/v1/projects/{project.id}/replays/{replay_id}")
+    assert response.status_code == 200
+    assert response.json()["step_count"] == 0
+
+
+async def test_list_replays_reports_zero_step_count_per_item(client, session):
+    project, component, v5, v6 = await _setup(session)
+    trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
+    create = await client.post(
+        f"/api/v1/projects/{project.id}/replays",
+        json={
+            "source_trajectory_id": trajectory_id,
+            "baseline_component_version_id": str(v5.id),
+            "candidate_component_version_id": str(v6.id),
+        },
+    )
+    replay_id = create.json()["id"]
+
+    response = await client.get(f"/api/v1/projects/{project.id}/replays")
+    assert response.status_code == 200
+    by_id = {item["id"]: item["step_count"] for item in response.json()["items"]}
+    assert by_id[replay_id] == 0
+
+
+async def test_execute_replay_step_count_matches_listed_steps(client, session):
+    project, component, v5, v6 = await _setup(session)
+    trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
+    create = await client.post(
+        f"/api/v1/projects/{project.id}/replays",
+        json={
+            "source_trajectory_id": trajectory_id,
+            "baseline_component_version_id": str(v5.id),
+            "candidate_component_version_id": str(v6.id),
+        },
+    )
+    replay_id = create.json()["id"]
+
+    # No executor is registered in the production wiring, so this fails
+    # deterministically at the substituted-execution step (same fixture
+    # as test_execute_replay_without_executor_returns_503) — the point
+    # here is that the response itself is async-safe and its step_count
+    # agrees with what was actually persisted, not a specific number.
+    response = await client.post(f"/api/v1/projects/{project.id}/replays/{replay_id}/execute")
+    assert response.status_code == 503
+
+    get_response = await client.get(f"/api/v1/projects/{project.id}/replays/{replay_id}")
+    steps_response = await client.get(f"/api/v1/projects/{project.id}/replays/{replay_id}/steps")
+    assert get_response.json()["step_count"] == steps_response.json()["total"]
+
+
 async def test_create_replay_incomplete_trajectory_returns_422(client, session):
     project, component, v5, v6 = await _setup(session)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})

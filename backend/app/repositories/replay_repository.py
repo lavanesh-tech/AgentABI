@@ -5,6 +5,7 @@ plus the one atomic status-transition statement.
 """
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,6 +86,45 @@ class ReplayRepository:
         )
         items = list((await self._session.execute(stmt)).scalars().all())
         return items, total
+
+    async def count_steps(self, replay_run_id: uuid.UUID) -> int:
+        """Explicit, async-safe `step_count` source (mirrors
+        `TrajectoryRepository.count_events` — see docs/DECISIONS.md) —
+        the API response layer must never derive this by accessing
+        `ReplayRun.steps` on an ORM instance that wasn't (or is no
+        longer) eagerly loaded: async SQLAlchemy raises `MissingGreenlet`
+        the moment an unloaded/expired relationship is touched outside
+        the greenlet the driver's I/O runs in. A single `COUNT(*)` query
+        is always correct, regardless of whether the `ReplayRun`
+        instance in hand came from a fresh insert, the idempotency-key
+        retry path, a `selectinload`ed fetch, or a post-
+        `session.refresh()` (which expires relationship state)
+        transition."""
+
+        stmt = (
+            select(func.count())
+            .select_from(ReplayStep)
+            .where(ReplayStep.replay_run_id == replay_run_id)
+        )
+        return (await self._session.execute(stmt)).scalar_one()
+
+    async def count_steps_for_replays(
+        self, replay_run_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        """Batched form of `count_steps` for a list of replay runs (one
+        grouped query instead of N+1) — used by `list_replays`'
+        response serialization. Missing keys mean zero steps, exactly
+        like `count_steps` would return for a replay run with none."""
+
+        if not replay_run_ids:
+            return {}
+        stmt = (
+            select(ReplayStep.replay_run_id, func.count())
+            .where(ReplayStep.replay_run_id.in_(replay_run_ids))
+            .group_by(ReplayStep.replay_run_id)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return {row[0]: row[1] for row in rows}
 
     async def transition_status(
         self,

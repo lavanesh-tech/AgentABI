@@ -69,7 +69,20 @@ class ReplayResponse(BaseModel):
     step_count: int
 
     @classmethod
-    def from_replay(cls, replay_run: ReplayRun) -> "ReplayResponse":
+    def from_replay(cls, replay_run: ReplayRun, *, step_count: int) -> "ReplayResponse":
+        """`step_count` is always supplied by the caller from an explicit
+        `ReplayService.count_steps(...)` query — never derived here from
+        `replay_run.steps`. That relationship is not reliably loaded on
+        every `ReplayRun` instance this is called with (a freshly
+        inserted run, one returned by the idempotency-key retry path, or
+        one whose attributes were just expired by `session.refresh()`
+        after a status transition all reach this method), and touching
+        an unloaded relationship under async SQLAlchemy raises
+        `MissingGreenlet` instead of transparently lazy-loading like
+        sync SQLAlchemy does. Mirrors
+        `app.api.v1.trajectories.TrajectoryResponse.from_trajectory`.
+        See docs/DECISIONS.md."""
+
         return cls(
             id=replay_run.id,
             project_id=replay_run.project_id,
@@ -85,7 +98,7 @@ class ReplayResponse(BaseModel):
             error=replay_run.error,
             started_at=replay_run.started_at,
             completed_at=replay_run.completed_at,
-            step_count=len(replay_run.steps),
+            step_count=step_count,
         )
 
 
@@ -165,7 +178,11 @@ async def create_replay(
         idempotency_key=payload.idempotency_key,
         configuration=payload.configuration,
     )
-    return ReplayResponse.from_replay(replay_run)
+    # Not hardcoded to 0: the idempotency-key retry path can return a
+    # pre-existing replay run that already has steps (e.g. already
+    # executed).
+    step_count = await service.count_steps(replay_run.id)
+    return ReplayResponse.from_replay(replay_run, step_count=step_count)
 
 
 @router.get("", response_model=ReplayListResponse, dependencies=[_READ])
@@ -179,8 +196,11 @@ async def list_replays(
     result = await service.list_replays(
         project_id, status=status_filter, page=page, page_size=page_size
     )
+    # One grouped COUNT query for the whole page, not one per replay run
+    # (and never `len(r.steps)`, which isn't eagerly loaded here).
+    counts = await service.count_steps_for_replays([r.id for r in result.items])
     return ReplayListResponse(
-        items=[ReplayResponse.from_replay(r) for r in result.items],
+        items=[ReplayResponse.from_replay(r, step_count=counts.get(r.id, 0)) for r in result.items],
         total=result.total,
         page=result.page,
         page_size=result.page_size,
@@ -192,7 +212,8 @@ async def get_replay(
     project_id: uuid.UUID, replay_id: uuid.UUID, service: ServiceDep
 ) -> ReplayResponse:
     replay_run = await service.get_replay(project_id, replay_id)
-    return ReplayResponse.from_replay(replay_run)
+    step_count = await service.count_steps(replay_id)
+    return ReplayResponse.from_replay(replay_run, step_count=step_count)
 
 
 @router.post(
@@ -202,7 +223,8 @@ async def execute_replay(
     project_id: uuid.UUID, replay_id: uuid.UUID, service: ServiceDep
 ) -> ReplayResponse:
     replay_run = await service.execute_replay(project_id, replay_id)
-    return ReplayResponse.from_replay(replay_run)
+    step_count = await service.count_steps(replay_id)
+    return ReplayResponse.from_replay(replay_run, step_count=step_count)
 
 
 @router.get("/{replay_id}/steps", response_model=ReplayStepListResponse, dependencies=[_READ])
