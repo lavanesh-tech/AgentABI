@@ -7,6 +7,7 @@ allocation.
 """
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,6 +97,43 @@ class TrajectoryRepository:
         )
         items = list((await self._session.execute(stmt)).scalars().all())
         return items, total
+
+    async def count_events(self, trajectory_id: uuid.UUID) -> int:
+        """Explicit, async-safe `event_count` source (see
+        docs/DECISIONS.md) — the API response layer must never derive
+        this by accessing `Trajectory.events` on an ORM instance that
+        wasn't (or is no longer) eagerly loaded: async SQLAlchemy raises
+        `MissingGreenlet` the moment an unloaded/expired relationship is
+        touched outside the greenlet the driver's I/O runs in. A single
+        `COUNT(*)` query is always correct, regardless of whether the
+        `Trajectory` instance in hand came from a fresh insert, a
+        `selectinload`ed fetch, or a post-`session.refresh()` (which
+        expires relationship state) transition."""
+
+        stmt = (
+            select(func.count())
+            .select_from(TrajectoryEvent)
+            .where(TrajectoryEvent.trajectory_id == trajectory_id)
+        )
+        return (await self._session.execute(stmt)).scalar_one()
+
+    async def count_events_for_trajectories(
+        self, trajectory_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        """Batched form of `count_events` for a list of trajectories (one
+        grouped query instead of N+1) — used by `list_trajectories`'
+        response serialization. Missing keys mean zero events, exactly
+        like `count_events` would return for a trajectory with none."""
+
+        if not trajectory_ids:
+            return {}
+        stmt = (
+            select(TrajectoryEvent.trajectory_id, func.count())
+            .where(TrajectoryEvent.trajectory_id.in_(trajectory_ids))
+            .group_by(TrajectoryEvent.trajectory_id)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return {row[0]: row[1] for row in rows}
 
     async def get_event_by_external_id(
         self, trajectory_id: uuid.UUID, external_event_id: str

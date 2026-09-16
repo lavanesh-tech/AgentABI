@@ -11,6 +11,7 @@ modules this service calls in a fixed order — never re-implemented here.
 """
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -198,6 +199,23 @@ class TrajectoryRecorderService:
         if trajectory is None:
             raise TrajectoryNotFound(trajectory_id)
         return trajectory
+
+    async def count_events(self, trajectory_id: uuid.UUID) -> int:
+        """Explicit event count for one trajectory — see
+        `TrajectoryRepository.count_events`'s docstring for why this is
+        never derived from `Trajectory.events` at the API layer. Callers
+        must already have established `trajectory_id` belongs to the
+        caller's project (e.g. via a prior `get_trajectory`/
+        `start_trajectory`/`_transition` call) — this method does no
+        tenant check of its own, matching every other thin repository
+        delegate in this service."""
+
+        return await self._trajectories.count_events(trajectory_id)
+
+    async def count_events_for_trajectories(
+        self, trajectory_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        return await self._trajectories.count_events_for_trajectories(trajectory_ids)
 
     async def list_trajectories(
         self,
