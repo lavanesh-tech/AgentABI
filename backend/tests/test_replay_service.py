@@ -203,6 +203,88 @@ async def test_execute_replay_without_executor_raises_unavailable(session):
     assert refreshed.status == ReplayStatus.FAILED
 
 
+# --- FAILED-state persistence regression coverage (ADR-085) -------------
+#
+# `app.core.database.get_db_session` rolls back the whole request session
+# on ANY exception, including the domain exceptions execute_replay raises
+# deliberately. These tests call `session.rollback()` (not `commit()`)
+# after catching the exception, exactly mirroring that dependency, to
+# prove the FAILED transition and its evidence steps were already
+# committed by the service itself and therefore survive.
+
+
+async def test_execute_replay_failed_state_survives_request_level_rollback(session):
+    """No executor wired (the real Phase 7 production posture) — the
+    RUNNING -> FAILED transition must still be durable after the
+    request-level rollback that follows the 503 response."""
+
+    from app.domain.exceptions import ReplayExecutorUnavailable
+
+    project, component, v5, v6 = await _setup(session)
+    trajectory = await _checkout_run(session, project, component, v5)
+    service = ReplayService(session)
+    replay = await service.create_replay(
+        project.id,
+        source_trajectory_id=trajectory.id,
+        baseline_component_version_id=v5.id,
+        candidate_component_version_id=v6.id,
+    )
+    await session.commit()
+
+    with pytest.raises(ReplayExecutorUnavailable):
+        await service.execute_replay(project.id, replay.id)
+    # Mirrors get_db_session's except-block: rollback, never commit, on
+    # the exception the route handler lets propagate.
+    await session.rollback()
+
+    refreshed = await service.get_replay(project.id, replay.id)
+    assert refreshed.status == ReplayStatus.FAILED
+    assert refreshed.error is not None
+    assert refreshed.completed_at is not None
+    # Steps finalized ahead of the unavailable executor (reused/skipped)
+    # must also have survived — count_steps agrees with what's listed,
+    # and is itself async-safe (ADR before this one).
+    step_count = await service.count_steps(replay.id)
+    listed = await service.list_steps(project.id, replay.id)
+    assert step_count == listed.total
+    assert step_count < len(replay.plan)
+
+
+async def test_execute_replay_failed_state_survives_rollback_after_executor_raises(session):
+    """An executor that raises (a transport/programming error, not a
+    structured ExecutionOutcome failure) must leave the same durable
+    RUNNING -> FAILED trail, surviving the request-level rollback."""
+
+    from app.domain.exceptions import ReplayExecutionFailed
+    from app.replay.models import ExecutionOutcome
+
+    class RaisingExecutor:
+        def supports(self, event_type: EventType) -> bool:
+            return event_type == EventType.TOOL_CALL
+
+        def execute(self, *, event_type, component_version_id, input) -> ExecutionOutcome:
+            raise RuntimeError("simulated transport failure")
+
+    project, component, v5, v6 = await _setup(session)
+    trajectory = await _checkout_run(session, project, component, v5)
+    service = ReplayService(session, executor_registry=ExecutorRegistry([RaisingExecutor()]))
+    replay = await service.create_replay(
+        project.id,
+        source_trajectory_id=trajectory.id,
+        baseline_component_version_id=v5.id,
+        candidate_component_version_id=v6.id,
+    )
+    await session.commit()
+
+    with pytest.raises(ReplayExecutionFailed):
+        await service.execute_replay(project.id, replay.id)
+    await session.rollback()
+
+    refreshed = await service.get_replay(project.id, replay.id)
+    assert refreshed.status == ReplayStatus.FAILED
+    assert "simulated transport failure" in (refreshed.error or "")
+
+
 async def test_execute_replay_on_terminal_replay_raises_invalid_transition(session):
     from app.domain.exceptions import InvalidReplayTransition
 

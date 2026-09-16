@@ -2,6 +2,37 @@
 
 Short-form ADRs. Newest first.
 
+## ADR-085 — `execute_replay`'s FAILED transition commits explicitly, ahead of the request-level rollback (2026-09-16)
+
+**Context:** Local E2E surfaced that a replay correctly reaching
+`ReplayExecutorUnavailable` (no executor wired for a `SUBSTITUTED_EXECUTION`
+step — expected in Phase 7, per `executor.py`'s empty production
+`ExecutorRegistry`) returned the correct 503, but the `RUNNING -> FAILED`
+transition and the evidence steps inserted ahead of it did not stick:
+`app.core.database.get_db_session` wraps each request in one session and
+calls `session.rollback()` on *any* exception, including these
+deliberately-raised domain exceptions, before the registered exception
+handler ever builds the error response. `_execute_replay_impl` was only
+`flush()`ing before raising `ReplayExecutorUnavailable`/
+`ReplayExecutionFailed`, so that request-level rollback erased the FAILED
+state and the already-finalized steps — contradicting ADR-034's own
+"the run is transitioned to FAILED first so state stays consistent"
+guarantee. (The existing service-level tests didn't catch this: they
+call `session.commit()` themselves after catching the exception, which
+masks the missing internal commit.)
+
+**Decision:** Both branches now `await self._session.commit()` — not
+just `flush()` — immediately after the FAILED transition, before
+re-raising. This is a narrowly-scoped, service-level fix: it commits
+exactly the transaction already open for this request (the PENDING ->
+RUNNING transition, any already-finalized non-substituted steps, and the
+RUNNING -> FAILED transition), so the subsequent request-level
+`rollback()` has nothing left to undo. No change to `get_db_session`
+itself (that would affect every domain, not just replay execution), no
+change to executor wiring, and no fake/hardcoded execution — Phase 7's
+architectural boundary (no real tool/MCP/API executor until a later
+phase) is unchanged and intentional, not a bug.
+
 ## ADR-084 — First-organization onboarding: authenticated self-service `POST /organizations`, not DB seeding, a CLI, or admin-only bootstrap (supersedes ADR-040's deferred item) (2026-09-15)
 
 **Context:** ADR-040 deliberately left a gap open: a GitHub-authenticated
