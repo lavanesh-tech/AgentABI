@@ -27,6 +27,19 @@ make typecheck   # mypy
 make test          # pytest
 ```
 
+`make test` needs a `python3.12` on your PATH (that's what `make venv`
+builds `backend/.venv` from). If your machine's default Python is a
+different version (e.g. 3.13) and you don't have 3.12 installed
+separately, run the suite in Docker instead — a real Python 3.12
+container with the same `[dev]` dependencies CI installs, built from a
+dedicated `test` stage that never ships in the `api`/`worker` production
+image:
+
+```bash
+make infra-up            # postgres, neo4j (test depends on both)
+docker compose run --rm test
+```
+
 `GET /api/v1/health` reports process liveness. `GET /api/v1/ready` reports
 whether Postgres is actually reachable (503 if not).
 

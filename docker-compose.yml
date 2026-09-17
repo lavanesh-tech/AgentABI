@@ -105,6 +105,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      # Explicit: backend/Dockerfile also defines a `test` stage (see its
+      # comments) — pinning this avoids ever silently building that stage
+      # here just because it happens to be defined later in the file.
+      target: runtime
     env_file:
       - .env
     environment:
@@ -136,6 +140,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: runtime
     command: ["python", "-m", "app.kafka.worker"]
     env_file:
       - .env
@@ -175,6 +180,51 @@ services:
       timeout: 3s
       start_period: 15s
       retries: 3
+
+  # Local backend pytest suite, in a real Python 3.12 environment with
+  # [dev] installed — the same dependency set CI installs via `pip
+  # install -e "backend[dev]"`, just containerized so it works
+  # regardless of the host machine's own Python version. `target: test`
+  # builds backend/Dockerfile's separate `test` stage (see its
+  # comments): the production `api`/`worker` image never gains pytest,
+  # ruff, or mypy. `profiles: ["test"]` keeps this out of a plain
+  # `docker compose up` — run it explicitly:
+  #
+  #   docker compose run --rm test
+  #
+  # `ensure_test_db.py` (backend/scripts/) creates the `agentabi_test`
+  # database on the shared `postgres` service the first time this runs
+  # against a given `postgres_data` volume, and is a no-op after that —
+  # `postgres`'s own POSTGRES_DB (`agentabi`) is the dev database, never
+  # the test one, so the two never share state. Neo4j-backed tests
+  # (tests/test_graph_repository.py) run for real against `neo4j` rather
+  # than self-skipping, since both services are already part of this
+  # stack. Mirrors the CI job's env vars (.github/workflows/ci.yml)
+  # exactly, substituting compose service DNS names for CI's localhost.
+  test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: test
+    profiles: ["test"]
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://agentabi:agentabi@postgres:5432/agentabi
+      TEST_POSTGRES_DSN: postgresql+asyncpg://agentabi:agentabi@postgres:5432/agentabi_test
+      POSTGRES_ADMIN_DSN: postgresql://agentabi:agentabi@postgres:5432/agentabi
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: agentabi_dev_password
+    command: ["sh", "-c", "python scripts/ensure_test_db.py && pytest --cov=app --cov-report=term-missing"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
 
   # Phase 16: scrapes api/worker `/metrics`. No remote_write, no
   # credentials, config lives entirely in observability/prometheus.yml.
