@@ -50,7 +50,7 @@ def safe_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
             continue
         if isinstance(value, str) and len(value) > _MAX_VALUE_LENGTH:
             value = value[:_MAX_VALUE_LENGTH] + "...(truncated)"
-        if isinstance(value, (str, bool, int, float)):
+        if isinstance(value, str | bool | int | float):
             safe[key] = value
         else:
             # Never attach an arbitrary object/dict/list as a span
