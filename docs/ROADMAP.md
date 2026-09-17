@@ -486,7 +486,7 @@ to complete verification before starting Phase 10.
 
 ## Phase 16 — Prometheus + Grafana: COMPLETE
 
-## Phase 17 — Terraform: NEXT
+## Phase 17 — Terraform AWS Infrastructure: COMPLETE
 
 Gemini (Phase 9) remains SKIPPED/OPTIONAL.
 
@@ -675,6 +675,73 @@ worker` targets show UP at `http://localhost:9090/targets`, and open
 `http://localhost:3001` (admin / the configured password) to see the
 provisioned "AgentABI — System Overview" dashboard before starting Phase
 17.
+
+## Phase 17 — Terraform AWS Infrastructure: COMPLETE (detail)
+
+Infrastructure-as-code only (ADR-086) — no AWS resources created, no
+`terraform apply` run, no Kubernetes application deployment. Adds
+`infra/terraform/`: nine modules (`networking`, `eks`, `iam`, `ecr`,
+`rds`, `redis`, `msk`, `secrets`, `dns`), the `environments/dev` root
+module wiring them together, and a standalone `bootstrap/` module for the
+optional S3+DynamoDB remote-state backend (never applied against AWS this
+phase; local state remains the default so `terraform init -backend=false`
+needs no AWS access at all).
+
+Three-tier VPC (public / private-app / private-data) with a cost-vs-
+availability NAT toggle (`single_nat_gateway`, default `true`: one NAT
+Gateway total, vs. one per AZ). EKS: KMS-encrypted control plane secrets,
+private worker nodes, OIDC provider for IRSA, one managed node group with
+configurable instance types/capacity type/scaling. IAM: every AWS-facing
+workload (Load Balancer Controller, EBS CSI driver, cluster-autoscaler,
+AgentABI's own API/worker pods) gets its own IRSA role scoped to a
+specific Kubernetes ServiceAccount — no broad node-wide permissions, no
+`AdministratorAccess`-style policy anywhere; the AgentABI app role is
+further scoped to only its own ECR repos and Secrets Manager secrets.
+RDS Postgres uses `manage_master_user_password = true` (AWS-managed
+Secrets Manager password) rather than any Terraform-held credential, with
+a documented disposable-vs-snapshot-preserving destroy trade-off
+(`skip_final_snapshot`). ElastiCache (Redis or Valkey, `redis_engine`)
+relies on network isolation rather than generating an AUTH token in
+Terraform state, by default. MSK supports both deployment modes the AWS
+provider exposes — `serverless` (default, cost-conscious, no idle broker
+cost) and `provisioned` (production-style, continuous broker cost) —
+selected by `msk_deployment_mode`, never replaced by a non-Kafka
+substitute. `modules/secrets` creates only empty Secrets Manager
+containers; no `aws_secretsmanager_secret_version` resource exists
+anywhere in this phase, and none of the local `.env` values were copied
+in. `modules/dns` is fully optional (`domain_name = ""` by default) — no
+domain name is invented, and the rest of the stack validates and is
+usable without one.
+
+New ADR-086 explains the ephemeral/on-demand demo lifecycle rationale;
+`infra/terraform/README.md` documents architecture, module
+responsibilities, network topology, security model, secrets strategy,
+remote-state bootstrapping, the MSK cost warning, and the full START /
+DEMO / SHUTDOWN / DESTROY / RECREATE lifecycle with an explicit table of
+which resources merely scale down vs. must be destroyed to stop billing
+(no fabricated dollar figures — links to AWS's own pricing pages instead).
+
+**Verification**: no `terraform` binary is installable in this sandbox
+(HashiCorp's release host, like every non-PyPI/npm host, returns 403
+through this session's egress proxy — confirmed directly, same standing
+sandbox restriction as every prior phase's package-install attempts) —
+`terraform fmt`, `terraform init`, `terraform validate`, and `tflint`
+could not actually be run, and that is reported honestly rather than
+fabricated. In their place: every `.tf`/`.json` file was checked for
+brace/parenthesis balance; every module argument passed from
+`environments/dev/main.tf` was cross-checked against that module's
+declared variables (no typos); every module output referenced from the
+`dev` root was cross-checked against that module's declared outputs; no
+duplicate resource/data/module/output labels; no `var.*` reference
+without a matching declaration. A specific, well-known Terraform pitfall
+was found and fixed during this review: indexing a `count`-conditional
+resource with a literal `[0]` inside a ternary (e.g. `var.x ? foo.this[0].y
+: null`) can raise "index out of range" even on the branch that isn't
+logically selected, once `foo.this` has zero instances — every such site
+(`modules/dns`, `modules/msk`, `modules/iam`, `modules/redis` outputs)
+was rewritten using the safe `one(foo.this[*].y)` / splat-and-`flatten()`
+idiom instead. This is static review, not a substitute for actually
+running `terraform validate` — do that locally before `apply`.
 
 ## Phase 14 — Frontend Dashboard: COMPLETE (detail)
 

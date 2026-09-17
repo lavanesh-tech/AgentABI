@@ -1,0 +1,35 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is gitignored —
+# never commit it if you add anything sensitive (though nothing in this
+# file's variable set is a secret; all real secrets live in Secrets
+# Manager, populated out-of-band — see infra/terraform/README.md).
+
+aws_region = "us-east-1"
+azs        = ["us-east-1a", "us-east-1b"]
+
+# --- Cost-conscious demo defaults (recommended for recruiter demo use) ---
+single_nat_gateway     = true
+eks_node_desired_size  = 2
+eks_node_min_size      = 1
+eks_node_max_size      = 4
+eks_node_capacity_type = "ON_DEMAND" # set "SPOT" for cheaper, interruptible nodes
+rds_instance_class     = "db.t4g.micro"
+rds_multi_az           = false
+rds_skip_final_snapshot = true # false to preserve demo data across destroy/recreate
+redis_node_type        = "cache.t4g.micro"
+msk_deployment_mode     = "serverless"
+
+# Restrict this to your own IP before leaving the cluster up longer than a
+# single demo session:
+# eks_cluster_endpoint_public_access_cidrs = ["203.0.113.4/32"]
+
+# Leave unset to skip Route53/ACM entirely:
+# domain_name        = "agentabi.example.com"
+# create_hosted_zone = true
+
+# --- Production-style alternative (uncomment to switch) ------------------
+# single_nat_gateway               = false
+# rds_multi_az                     = true
+# rds_skip_final_snapshot          = false
+# rds_deletion_protection          = true
+# redis_automatic_failover_enabled = true
+# msk_deployment_mode               = "provisioned"
