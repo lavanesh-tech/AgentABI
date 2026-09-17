@@ -50,11 +50,11 @@ output "secrets_manager_secret_arns" {
 
 output "iam_role_arns" {
   value = {
-    lb_controller       = module.iam.lb_controller_role_arn
-    ebs_csi             = module.iam.ebs_csi_role_arn
-    cluster_autoscaler  = module.iam.cluster_autoscaler_role_arn
-    app_workload        = module.iam.app_workload_role_arn
-    external_dns        = module.iam.external_dns_role_arn
+    lb_controller      = module.iam.lb_controller_role_arn
+    ebs_csi            = module.iam.ebs_csi_role_arn
+    cluster_autoscaler = module.iam.cluster_autoscaler_role_arn
+    app_workload       = module.iam.app_workload_role_arn
+    external_dns       = module.iam.external_dns_role_arn
   }
 }
 
