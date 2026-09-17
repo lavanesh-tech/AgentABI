@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 
 import structlog
 from aiokafka import AIOKafkaConsumer
+from aiokafka.structs import ConsumerRecord
 
 from app.core.config import get_settings
 from app.events.envelope import EventEnvelope, deserialize_envelope
@@ -81,7 +82,7 @@ class KafkaEventConsumer:
         async for message in self._consumer:
             await self._process_one(message)
 
-    async def _process_one(self, message) -> None:  # noqa: ANN001 - aiokafka ConsumerRecord
+    async def _process_one(self, message: ConsumerRecord) -> None:
         # spec §10/§13: extract W3C context from Kafka headers before
         # starting this message's span, so it's a child of the
         # producer's span rather than the start of a new trace.
@@ -126,9 +127,9 @@ class KafkaEventConsumer:
 
     async def _dispatch_with_retry(
         self,
-        message,
+        message: ConsumerRecord,
         envelope: EventEnvelope,
-        process_start: float,  # noqa: ANN001
+        process_start: float,
     ) -> None:
         set_current_span_attributes(
             {
@@ -242,7 +243,7 @@ class KafkaEventConsumer:
 
     async def _to_dlq(
         self,
-        message,  # noqa: ANN001
+        message: ConsumerRecord,
         failure_category: str,
         *,
         retry_count: int,

@@ -4,6 +4,8 @@
 this module (see `tests/test_differential_no_llm_dependency.py`).
 """
 
+from typing import Any
+
 from app.differential.alignment import StepPair, align_steps
 from app.differential.models import (
     AlignmentMethod,
@@ -40,6 +42,10 @@ def _diff_pair(pair: StepPair) -> StepDifference:
     b, c = pair.baseline, pair.candidate
 
     if b is None:
+        # A STEP_ADDED pair always carries a real candidate — align_steps
+        # only ever produces (None, None) for neither, never both None
+        # (see StepPair.sort_key's identical assertion).
+        assert c is not None
         return StepDifference(
             alignment_method=pair.method,
             difference_types=(DifferenceType.STEP_ADDED,),
@@ -128,7 +134,7 @@ def _diff_errors(b: ReplayStepView, c: ReplayStepView) -> ErrorDifference | None
     return None
 
 
-def _error_category(error) -> str | None:
+def _error_category(error: Any) -> str | None:
     """Never returns a raw stack trace or secret (spec §13) — only a
     sanitized, safe category label."""
 

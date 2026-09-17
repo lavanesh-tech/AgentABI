@@ -5,7 +5,8 @@ place a route declares "this action is rate-limited." Mirrors
 [...]` on a route, so no route handler calls Redis directly.
 """
 
-from typing import Annotated
+from collections.abc import Callable, Coroutine
+from typing import Annotated, Any
 
 from fastapi import Depends, Request
 
@@ -27,7 +28,13 @@ def get_client_identity(request: Request, settings: Settings) -> str:
     request header."""
 
     if settings.trusted_proxy_count > 0:
-        forwarded_for = request.headers.get("X-Forwarded-For")
+        # Starlette's `Headers.get` is untyped in this installed version
+        # (resolves to `Any`, same root cause as the BaseHTTPMiddleware
+        # typing gap documented in app/core/middleware.py) — annotating
+        # the local variable narrows it back to `str | None` at the
+        # source, rather than letting `Any` leak into `hops`/the return
+        # value below.
+        forwarded_for: str | None = request.headers.get("X-Forwarded-For")
         if forwarded_for:
             hops = [hop.strip() for hop in forwarded_for.split(",") if hop.strip()]
             trusted_index = len(hops) - settings.trusted_proxy_count
@@ -36,7 +43,9 @@ def get_client_identity(request: Request, settings: Settings) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def rate_limit_by_client(bucket: str, limit: int, window_seconds: int):
+def rate_limit_by_client(
+    bucket: str, limit: int, window_seconds: int
+) -> Callable[[Request, Settings], Coroutine[Any, Any, None]]:
     """Rate-limits by client IP (spec §5's "anonymous auth endpoint"
     case) — used for the GitHub OAuth login/callback routes, which run
     before any AgentABI identity exists."""
@@ -54,7 +63,9 @@ def rate_limit_by_client(bucket: str, limit: int, window_seconds: int):
     return _dependency
 
 
-def rate_limit_by_user(bucket: str, limit: int, window_seconds: int):
+def rate_limit_by_user(
+    bucket: str, limit: int, window_seconds: int
+) -> Callable[[AuthenticatedPrincipal, Settings], Coroutine[Any, Any, None]]:
     """Rate-limits by authenticated user id (spec §5's "authenticated
     endpoint" case) — used for mutation/scan/replay routes, which
     already depend on `get_current_user` via authorization, so this

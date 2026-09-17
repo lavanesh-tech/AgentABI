@@ -15,6 +15,8 @@ every request before routing.
 """
 
 import uuid
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 import structlog
 from fastapi import FastAPI, Request, status
@@ -200,7 +202,9 @@ def _envelope(status_code: int, code: str, message: str, request_id: str) -> JSO
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    def _make_handler(status_code: int, code: str):
+    def _make_handler(
+        status_code: int, code: str
+    ) -> Callable[[Request, Exception], Coroutine[Any, Any, JSONResponse]]:
         async def _handler(request: Request, exc: Exception) -> JSONResponse:
             record_error(get_settings(), error_type=_error_category_for_status(status_code))
             return _envelope(status_code, code, str(exc), _request_id(request))

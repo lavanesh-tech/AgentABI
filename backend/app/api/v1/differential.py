@@ -6,7 +6,7 @@ no persistence details beyond calling the service.
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -58,8 +58,8 @@ class DifferentialChangeResponse(BaseModel):
     candidate_step_id: uuid.UUID | None
     baseline_status: str | None
     candidate_status: str | None
-    output_differences: list[dict]
-    error_difference: dict | None
+    output_differences: list[dict[str, Any]]
+    error_difference: dict[str, Any] | None
     latency_delta_ms: int | None
     latency_percent_delta: float | None
 

@@ -8,6 +8,10 @@ is disabled. No compatibility/risk logic here; this is dispatch glue
 policy, optionally publish a result event) only.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import structlog
 
 from app.domain.exceptions import (
@@ -24,6 +28,16 @@ from app.events.analysis_events import (
     build_analysis_failed_event,
     parse_analysis_requested_payload,
 )
+
+if TYPE_CHECKING:
+    # Only for annotations below — kept out of the runtime import graph
+    # (same reasoning the pre-existing comment on `session` gave for
+    # avoiding a module-scope sqlalchemy import: this handler stays
+    # importable without pulling in the ORM/AsyncSession at import time).
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.events.analysis_events import AnalysisRequestedPayload
+    from app.models.github_pr_analysis import GitHubPullRequestAnalysis
 from app.events.envelope import EVENT_TYPE_ANALYSIS_REQUESTED, EventEnvelope, validate_event_version
 from app.events.errors import PermanentEventProcessingError, TransientEventProcessingError
 from app.events.publisher import EventPublisher
@@ -38,7 +52,7 @@ logger = structlog.get_logger(__name__)
 class AnalysisRequestHandler:
     def __init__(
         self,
-        session,  # AsyncSession — untyped here to avoid importing sqlalchemy at module scope
+        session: AsyncSession,
         *,
         checks_client: GitHubChecksClient,
         result_publisher: EventPublisher | None = None,
@@ -92,7 +106,12 @@ class AnalysisRequestHandler:
         # a later redelivery retries the publish, never fabricates a
         # completion event for a check that never actually posted.
 
-    async def _publish_completed(self, payload, analysis, organization_id: str) -> None:
+    async def _publish_completed(
+        self,
+        payload: AnalysisRequestedPayload,
+        analysis: GitHubPullRequestAnalysis,
+        organization_id: str,
+    ) -> None:
         if self._result_publisher is None:
             return
         assessment = await self._session.get(RiskAssessmentRecord, analysis.risk_assessment_id)
@@ -116,7 +135,9 @@ class AnalysisRequestHandler:
                 github_pr_analysis_id=payload.github_pr_analysis_id,
             )
 
-    async def _publish_failure(self, payload, organization_id: str, *, error_category: str) -> None:
+    async def _publish_failure(
+        self, payload: AnalysisRequestedPayload, organization_id: str, *, error_category: str
+    ) -> None:
         if self._result_publisher is None:
             return
         event = build_analysis_failed_event(

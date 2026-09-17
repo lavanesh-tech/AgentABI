@@ -15,6 +15,8 @@ side has already matched:
    candidate-only becomes `STEP_ADDED` (spec §8).
 """
 
+import uuid
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from app.differential.models import AlignmentMethod, ReplayStepView
@@ -84,8 +86,10 @@ def align_steps(baseline: list[ReplayStepView], candidate: list[ReplayStepView])
     return pairs
 
 
-def _index(steps, *, key):
-    result: dict = {}
+def _index[K](
+    steps: Iterable[ReplayStepView], *, key: Callable[[ReplayStepView], K]
+) -> dict[K, ReplayStepView]:
+    result: dict[K, ReplayStepView] = {}
     for step in steps:
         k = key(step)
         if k not in result:  # first-seen wins — deterministic, no overwrite churn
@@ -93,8 +97,10 @@ def _index(steps, *, key):
     return result
 
 
-def _group_by_component(steps):
-    groups: dict = {}
+def _group_by_component(
+    steps: Iterable[ReplayStepView],
+) -> dict[uuid.UUID, list[ReplayStepView]]:
+    groups: dict[uuid.UUID, list[ReplayStepView]] = {}
     for step in sorted(steps, key=lambda s: s.sequence_number):
         if step.component_id is None:
             continue

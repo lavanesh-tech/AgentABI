@@ -15,6 +15,7 @@ import time
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp
 
 from app.core.config import Settings
 from app.observability import record_http_request, track_http_in_progress
@@ -33,13 +34,18 @@ def _route_template(request: Request) -> str:
     return path if isinstance(path, str) else _UNMATCHED_ROUTE
 
 
-class PrometheusMetricsMiddleware(BaseHTTPMiddleware):
+# See app/core/security_headers.py's comment: Starlette's
+# `BaseHTTPMiddleware` resolves to `Any` under this project's mypy
+# configuration, so strict mode's `disallow_subclassing_any` flags
+# subclassing it — a genuine third-party typing gap with no cleaner
+# typed boundary available.
+class PrometheusMetricsMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
     """Outermost middleware layer (added last in `create_app()`) so its
     timing covers the full request/response cycle, including every other
     middleware. A no-op pass-through when `METRICS_ENABLED=false` —
     metrics recording itself never raises (spec §24)."""
 
-    def __init__(self, app, settings: Settings) -> None:  # noqa: ANN001 - Starlette app type
+    def __init__(self, app: ASGIApp, settings: Settings) -> None:
         super().__init__(app)
         self._settings = settings
 

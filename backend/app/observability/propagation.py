@@ -12,6 +12,16 @@ call site.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Only for the return annotation below — never imported at runtime
+    # (this module stays importable with OTel absent/disabled; see
+    # `_otel_available()`), and `from __future__ import annotations`
+    # above means this string-deferred annotation never actually
+    # evaluates the import either.
+    from opentelemetry.context import Context
+
 KafkaHeaders = list[tuple[str, bytes]]
 
 
@@ -38,7 +48,7 @@ def inject_trace_headers() -> KafkaHeaders:
     return [(key, value.encode("utf-8")) for key, value in carrier.items()]
 
 
-def extract_trace_context(headers: KafkaHeaders | None):
+def extract_trace_context(headers: KafkaHeaders | None) -> Context | None:
     """Called from the consumer before starting its own span (spec
     §10's "Kafka headers -> extract -> worker consumer span"). Returns
     an OTel `Context` (or `None` if unavailable) suitable for
