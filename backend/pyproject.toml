@@ -69,6 +69,23 @@ mypy_path = "."
 explicit_package_bases = true
 ignore_missing_imports = true
 
+# FastAPI's route-decorator factories (`@router.get(...)`, `@app.get(...)`,
+# `@app.exception_handler(...)`) resolve to an untyped decorator in this
+# environment — the same Starlette typing gap documented inline on
+# app/core/middleware.py's, app/core/security_headers.py's, and
+# app/core/metrics_middleware.py's `BaseHTTPMiddleware` subclasses, which
+# is a real, third-party typing limitation with no cleaner typed
+# boundary — even though every decorated handler in these modules has
+# full parameter and return type annotations of its own. Scoped to only
+# the two module groups that actually declare FastAPI routes; every
+# other strict-mode check (no-untyped-def, no-any-return,
+# disallow-any-generics, disallow_subclassing_any, etc.) still applies
+# here exactly as everywhere else in this codebase — this disables only
+# `disallow_untyped_decorators`, and only for these modules.
+[[tool.mypy.overrides]]
+module = ["app.api.v1.*", "app.main"]
+disallow_untyped_decorators = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

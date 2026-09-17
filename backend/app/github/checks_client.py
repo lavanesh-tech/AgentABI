@@ -12,6 +12,7 @@ against `FakeGitHubChecksClient` instead (`checks_fake.py`).
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -59,8 +60,8 @@ def _conclusion_value(request: CheckRunRequest) -> str | None:
     return request.conclusion.value if request.conclusion is not None else None
 
 
-def _body(request: CheckRunRequest) -> dict:
-    body: dict = {
+def _body(request: CheckRunRequest) -> dict[str, Any]:
+    body: dict[str, Any] = {
         "name": request.name,
         "head_sha": request.head_sha,
         "status": request.status.value,
@@ -76,7 +77,7 @@ def _body(request: CheckRunRequest) -> dict:
     return body
 
 
-def _result_from_response(data: dict) -> CheckRunResult:
+def _result_from_response(data: dict[str, Any]) -> CheckRunResult:
     return CheckRunResult(
         id=int(data["id"]),
         status=CheckStatus(data["status"]),

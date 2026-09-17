@@ -7,13 +7,14 @@ persisted; the analyzer itself never touches the database.
 import time
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.differential.analyzer import ANALYZER_VERSION, analyze
 from app.differential.models import DifferentialReport as PureDifferentialReport
-from app.differential.models import ReplayStepView
+from app.differential.models import ReplayStepView, StepDifference
 from app.domain.checksums import compute_checksum
 from app.domain.exceptions import (
     DifferentialReportNotFound,
@@ -202,7 +203,7 @@ def _to_record(
     return record
 
 
-def _to_change_record(order_index: int, sd) -> DifferentialChangeRecord:  # noqa: ANN001
+def _to_change_record(order_index: int, sd: StepDifference) -> DifferentialChangeRecord:
     latency = sd.latency_difference
     error = sd.error_difference
     return DifferentialChangeRecord(
@@ -241,7 +242,7 @@ def _to_change_record(order_index: int, sd) -> DifferentialChangeRecord:  # noqa
     )
 
 
-def _canonical_report_dict(report: PureDifferentialReport) -> dict:
+def _canonical_report_dict(report: PureDifferentialReport) -> dict[str, Any]:
     """A plain, deterministic dict of the report's content for hashing
     (spec §34) — same canonicalization approach as
     `app.domain.checksums` (sorted keys downstream), built from the

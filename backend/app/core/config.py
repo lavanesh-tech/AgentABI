@@ -78,12 +78,21 @@ class Settings(BaseSettings):
     trusted_proxy_count: int = 0
 
     # --- PostgreSQL -----------------------------------------------------
+    # Constructing PostgresDsn/RedisDsn directly (rather than passing a
+    # plain `str` literal to `Field(default=...)`) gives the field a
+    # default whose *static* type actually matches its annotation — a
+    # bare string literal default is only a `PostgresDsn` once pydantic
+    # validates it, which doesn't happen for unvalidated defaults, so
+    # mypy correctly flagged the literal-string form as a real
+    # `str`-vs-`PostgresDsn` mismatch. This also validates the local-dev
+    # default DSN's format at import time instead of only on first
+    # override.
     postgres_dsn: PostgresDsn = Field(
-        default="postgresql+asyncpg://agentabi:agentabi@localhost:5432/agentabi"
+        default=PostgresDsn("postgresql+asyncpg://agentabi:agentabi@localhost:5432/agentabi")
     )
 
     # --- Redis ------------------------------------------------------------
-    redis_dsn: RedisDsn = Field(default="redis://localhost:6379/0")
+    redis_dsn: RedisDsn = Field(default=RedisDsn("redis://localhost:6379/0"))
 
     # --- Neo4j --------------------------------------------------------------
     neo4j_uri: str = "bolt://localhost:7687"

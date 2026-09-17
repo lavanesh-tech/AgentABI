@@ -76,4 +76,4 @@ class AuditService:
         items, total = await self._events.list_for_organization(
             organization_id, action=action, offset=offset, limit=page_size
         )
-        return Page(items=items, total=total, page=page, page_size=page_size)
+        return Page(items=list(items), total=total, page=page, page_size=page_size)

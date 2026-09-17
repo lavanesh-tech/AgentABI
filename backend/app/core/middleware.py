@@ -12,7 +12,12 @@ from app.core.logging import bind_correlation_id, clear_contextvars
 CORRELATION_ID_HEADER = "X-Correlation-ID"
 
 
-class CorrelationIdMiddleware(BaseHTTPMiddleware):
+# See app/core/security_headers.py's comment: Starlette's
+# `BaseHTTPMiddleware` resolves to `Any` under this project's mypy
+# configuration, so strict mode's `disallow_subclassing_any` flags
+# subclassing it — a genuine third-party typing gap with no cleaner
+# typed boundary available.
+class CorrelationIdMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
     """Reads/generates a correlation ID per request, binds it to structlog's
     contextvars so every log line emitted while handling the request
     includes it, and echoes it back on the response header."""

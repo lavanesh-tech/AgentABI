@@ -143,10 +143,12 @@ def constraint_tightened(key: str, old_value: object, new_value: object) -> bool
     is ambiguous/unknown for this key (None — e.g. `pattern`,
     `multipleOf`, or a key not modeled here at all)."""
 
-    if key in _TIGHTENS_WHEN_LARGER and _both_numeric(old_value, new_value):
-        return new_value > old_value  # type: ignore[operator]
-    if key in _TIGHTENS_WHEN_SMALLER and _both_numeric(old_value, new_value):
-        return new_value < old_value  # type: ignore[operator]
+    if key in _TIGHTENS_WHEN_LARGER and (pair := _as_numeric_pair(old_value, new_value)):
+        old_number, new_number = pair
+        return new_number > old_number
+    if key in _TIGHTENS_WHEN_SMALLER and (pair := _as_numeric_pair(old_value, new_value)):
+        old_number, new_number = pair
+        return new_number < old_number
     if key == "uniqueItems":
         # False -> True adds a constraint (tighter); True -> False removes
         # one (looser).
@@ -176,10 +178,19 @@ def classify_constraint_change(
     return (CL.POTENTIALLY_BREAKING, SV.LOW)  # NEUTRAL
 
 
-def _both_numeric(a: object, b: object) -> bool:
-    is_a_number = isinstance(a, int | float) and not isinstance(a, bool)
-    is_b_number = isinstance(b, int | float) and not isinstance(b, bool)
-    return is_a_number and is_b_number
+def _as_numeric_pair(a: object, b: object) -> tuple[float, float] | None:
+    """Narrows `a`/`b` to `float` (bools excluded — `True > False` isn't
+    a meaningful constraint comparison) so callers get real `float`
+    values to compare instead of comparing `object`s directly (which
+    mypy correctly refuses). `isinstance` checks inline in the `if`
+    (rather than via a separate bool-returning helper) so mypy can
+    actually narrow `a`/`b`'s type within this branch."""
+
+    if isinstance(a, bool) or isinstance(b, bool):
+        return None
+    if isinstance(a, int | float) and isinstance(b, int | float):
+        return float(a), float(b)
+    return None
 
 
 def derive_status(changes: tuple[Change, ...]) -> CompatibilityStatus:

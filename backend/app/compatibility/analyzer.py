@@ -362,8 +362,13 @@ def _diff_agent_tools(base_tools: list[Any], cand_tools: list[Any]) -> list[Chan
             return str(key) if key is not None else None
         return None
 
-    base_keys = {tool_key(t) for t in base_tools if tool_key(t) is not None}
-    cand_keys = {tool_key(t) for t in cand_tools if tool_key(t) is not None}
+    # The walrus assigns and narrows the *same* expression mypy then
+    # yields, so `base_keys`/`cand_keys` are `set[str]`, not
+    # `set[str | None]` (calling `tool_key(t)` again in the yielded
+    # expression wouldn't narrow, since mypy can't correlate two
+    # separate calls as returning the same value).
+    base_keys = {key for t in base_tools if (key := tool_key(t)) is not None}
+    cand_keys = {key for t in cand_tools if (key := tool_key(t)) is not None}
 
     changes: list[Change] = []
     for key in sorted(base_keys - cand_keys):

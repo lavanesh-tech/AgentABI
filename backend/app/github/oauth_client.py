@@ -135,11 +135,13 @@ def _select_primary_verified_email(entries: object) -> str | None:
     if not isinstance(entries, list):
         return None
     for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        email = entry.get("email")
         if (
-            isinstance(entry, dict)
-            and entry.get("primary") is True
+            entry.get("primary") is True
             and entry.get("verified") is True
-            and isinstance(entry.get("email"), str)
+            and isinstance(email, str)
         ):
-            return entry["email"]
+            return email
     return None

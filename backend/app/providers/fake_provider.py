@@ -38,6 +38,7 @@ class FakeLLMProvider:
         if self.mode == "error":
             raise LLMExplanationFailed(self.provider_name, "simulated provider failure")
 
+        references: tuple[EvidenceReference, ...]
         if self.mode == "invalid_reference":
             references = (EvidenceReference(reference_id="not-a-real-id", note="fabricated"),)
         else:

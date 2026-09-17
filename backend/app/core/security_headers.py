@@ -23,12 +23,19 @@ forbid caching.
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp
 
 from app.core.config import Settings
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, settings: Settings) -> None:
+# Starlette's `BaseHTTPMiddleware` itself resolves to `Any` under this
+# project's mypy configuration (a known Starlette typing gap — see
+# app/core/middleware.py's identical note), so strict mode's
+# `disallow_subclassing_any` flags subclassing it here. There is no
+# cleaner typed boundary: this is Starlette's own, real, prescribed
+# middleware base class.
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
+    def __init__(self, app: ASGIApp, settings: Settings) -> None:
         super().__init__(app)
         self._settings = settings
 

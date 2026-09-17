@@ -13,6 +13,7 @@ invariant.py`.
 import time
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -311,7 +312,7 @@ def _to_rule_result_record(order_index: int, rule: TriggeredRule) -> RiskRuleRes
     )
 
 
-def _canonical_assessment_dict(assessment: PureRiskAssessment) -> dict:
+def _canonical_assessment_dict(assessment: PureRiskAssessment) -> dict[str, Any]:
     """A plain, deterministic dict of the assessment's content for
     hashing (spec §33's reproducibility requirement) — same
     canonicalization approach as `DifferentialService`'s

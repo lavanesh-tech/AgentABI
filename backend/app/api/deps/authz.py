@@ -18,7 +18,8 @@ passes. Authorization happens once, before the route body runs.
 """
 
 import uuid
-from typing import Annotated
+from collections.abc import Callable, Coroutine
+from typing import Annotated, Any
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,7 +33,12 @@ from app.models.organization_member import OrganizationMember
 from app.models.project import Project
 
 
-def require_project_permission(permission: Permission):
+def require_project_permission(
+    permission: Permission,
+) -> Callable[
+    [uuid.UUID, AuthenticatedPrincipal, AsyncSession],
+    Coroutine[Any, Any, tuple[Project, OrganizationMember]],
+]:
     """Returns a FastAPI dependency that authorizes `permission` against
     the `project_id` path parameter of whatever route depends on it,
     and returns the resolved `(Project, OrganizationMember)` so the
@@ -53,7 +59,12 @@ def require_project_permission(permission: Permission):
     return _dependency
 
 
-def require_organization_permission(permission: Permission):
+def require_organization_permission(
+    permission: Permission,
+) -> Callable[
+    [uuid.UUID, AuthenticatedPrincipal, AsyncSession],
+    Coroutine[Any, Any, OrganizationMember],
+]:
     """Returns a FastAPI dependency that authorizes `permission` against
     the `organization_id` path parameter of whatever route depends on
     it. Not yet used by any shipped route (Phase C ships no organization/
