@@ -51,7 +51,7 @@ def _string_constants_from_value(value: ast.AST) -> set[str]:
 
     if isinstance(value, ast.Call):
         source_nodes: list[ast.AST] = list(value.args)
-    elif isinstance(value, (ast.Tuple, ast.List)):
+    elif isinstance(value, ast.Tuple | ast.List):
         source_nodes = list(value.elts)
     else:
         source_nodes = [value]

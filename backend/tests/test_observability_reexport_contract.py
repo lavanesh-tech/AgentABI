@@ -52,7 +52,7 @@ def _metrics_public_callables() -> set[str]:
     function_names = {
         node.name
         for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
     return all_names & function_names
 
