@@ -1,0 +1,17 @@
+# Recruiter-demo overrides applied by .github/workflows/deploy.yml on top
+# of values.yaml. Single replica everywhere — a demo does not need HA,
+# and this keeps the node group small (see infra/terraform/README.md's
+# cost-control notes). AWS-facing values here are still empty; they are
+# populated at deploy time via `--set` from real `terraform output`
+# values (deploy.yml), never hardcoded, and never in this file.
+
+replicaCount:
+  api: 1
+  worker: 1
+  frontend: 1
+
+neo4j:
+  storageSize: 10Gi
+
+ingress:
+  enabled: false

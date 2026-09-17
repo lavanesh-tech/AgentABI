@@ -1,0 +1,239 @@
+name: CI
+
+# Runs on every push and pull request. Read-only by default (no job here
+# writes to the repository, pushes images, or touches AWS) — see
+# deploy.yml for that separate, manually-triggered concern.
+#
+# NOTE (Phase 18): this workflow has been authored and locally/statically
+# validated (YAML parse, actionlint where available, and by hand against
+# each job's underlying commands) but has NOT yet been executed by GitHub
+# Actions — this repository has intentionally not been pushed to GitHub
+# yet (see docs/DECISIONS.md). Do not read a passing badge here as a
+# claim that it has run.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  backend-quality:
+    name: Backend / lint, typecheck, test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agentabi
+          POSTGRES_PASSWORD: agentabi
+          POSTGRES_DB: agentabi_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U agentabi -d agentabi_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/agentabi_dev_password
+        ports: ["7687:7687"]
+        options: >-
+          --health-cmd "wget -qO- http://localhost:7474 || exit 1"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install backend (with dev extras)
+        run: pip install -e "backend[dev]"
+
+      - name: Ruff lint
+        run: cd backend && ruff check app tests
+
+      - name: Ruff format check
+        run: cd backend && ruff format --check app tests
+
+      - name: mypy
+        run: cd backend && mypy app
+
+      - name: pytest
+        env:
+          POSTGRES_DSN: postgresql+asyncpg://agentabi:agentabi@localhost:5432/agentabi
+          TEST_POSTGRES_DSN: postgresql+asyncpg://agentabi:agentabi@localhost:5432/agentabi_test
+          NEO4J_URI: bolt://localhost:7687
+          NEO4J_USER: neo4j
+          NEO4J_PASSWORD: agentabi_dev_password
+        run: cd backend && pytest --cov=app --cov-report=term-missing
+
+  frontend-quality:
+    name: Frontend / lint, typecheck, build, test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # No package-lock.json exists in this repository yet (see the
+          # note below), so `cache: npm` here has no lockfile to key on
+          # and is intentionally omitted rather than pointed at a file
+          # that doesn't exist.
+
+      # frontend/ has never had a committed package-lock.json (predates
+      # Phase 18; the Makefile's own `frontend` target already used
+      # `npm install`, not `npm ci`) and Phase 18 could not generate one:
+      # this sandbox's registry access reproducibly 403s on
+      # `@playwright/test` specifically (confirmed non-transient — see
+      # docs/ROADMAP.md's Phase 18 section) while every other package in
+      # package.json resolves fine. Rather than commit a partial/invalid
+      # lockfile (which would just fail `npm ci` for a different,
+      # confusing reason on a real runner), this job uses `npm install`,
+      # matching the repository's existing convention. Once
+      # package-lock.json is generated from a machine with full registry
+      # access and committed, switch this step to `npm ci` and restore
+      # `cache: npm` above for reproducible, faster installs.
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: ESLint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Type check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Unit tests (vitest)
+        working-directory: frontend
+        run: npm run test
+
+      - name: Production build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_AGENTABI_API_URL: http://localhost:8000/api/v1
+        run: npm run build
+
+  terraform-validate:
+    name: Terraform / fmt, init, validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform fmt (all roots)
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: dev environment — init (no backend, no AWS access needed)
+        working-directory: infra/terraform/environments/dev
+        run: terraform init -backend=false
+
+      - name: dev environment — validate
+        working-directory: infra/terraform/environments/dev
+        run: terraform validate
+
+      - name: bootstrap root — init
+        working-directory: infra/terraform/bootstrap
+        run: terraform init -backend=false
+
+      - name: bootstrap root — validate
+        working-directory: infra/terraform/bootstrap
+        run: terraform validate
+
+      # Deliberately no `terraform plan`/`apply` here — this job proves the
+      # configuration is syntactically and internally valid, not that it
+      # matches deployed AWS state. No AWS credentials are configured for
+      # this job, and none are needed for fmt/init(-backend=false)/validate.
+
+  security:
+    name: Security / secrets, vulnerabilities, IaC
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans full history, not just the diff
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # One tool (Trivy) covers three deterministic, signature/rule-based
+      # scan types below rather than three separate scanners with
+      # overlapping purpose. No source code or scan output is sent to an
+      # LLM for any of these — findings are rule matches, reported as-is.
+      - name: Filesystem vulnerability scan (Python + npm dependencies)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          skip-dirs: frontend/node_modules,backend/.venv
+
+      - name: IaC misconfiguration scan (Terraform)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: infra/terraform
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  docker-build:
+    name: Docker / build production images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Builds only — no registry login, no push. Publishing to ECR is a
+      # separate, manually-triggered concern (deploy.yml) so a routine PR
+      # build can never leak credentials or publish an unreviewed image.
+      - name: Build backend image (also used by the worker; same Dockerfile, different command)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: false
+          tags: agentabi-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: false
+          tags: agentabi-frontend:ci
+          build-args: |
+            NEXT_PUBLIC_AGENTABI_API_URL=http://localhost:8000/api/v1
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

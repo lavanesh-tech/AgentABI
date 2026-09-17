@@ -3,8 +3,12 @@ terraform {
 
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
+      source = "hashicorp/aws"
+      # >= 5.30 floor (not just "~> 5.0"): that's when the AWS provider
+      # added aws_eks_access_entry / aws_eks_access_policy_association
+      # (EKS Access Entries), which the Phase 18 github-oidc module uses
+      # to grant the GitHub Actions deploy role cluster RBAC.
+      version = ">= 5.30, < 6.0"
     }
     tls = {
       source  = "hashicorp/tls"

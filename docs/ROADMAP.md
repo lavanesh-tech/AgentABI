@@ -21,10 +21,19 @@ every phase.
 | 14 | Frontend | ⬜ Not started |
 | 15 | OpenTelemetry | ⬜ Not started |
 | 16 | Prometheus + Grafana | ⬜ Not started |
-| 17 | Terraform | ⬜ Not started |
-| 18 | AWS deployment | ⬜ Not started |
-| 19 | CI/CD | ⬜ Not started |
-| 20 | Benchmarks + README + diagrams + demo prep | ⬜ Not started |
+| 17 | Terraform AWS Infrastructure | ✅ Done (see DECISIONS.md ADR-086) |
+| 18 | CI/CD Foundation | ✅ Done (see DECISIONS.md ADR-087) — order swapped with #19, see note below |
+| 19 | AWS Deployment | ⬜ Not started |
+| 20 | Final production/recruiter validation and release | ⬜ Not started |
+
+Phase order note: #18 and #19 were deliberately swapped from this
+table's original phase numbering (Terraform → AWS deployment → CI/CD) to
+Terraform → CI/CD → AWS deployment, so the CI/CD pipeline and Helm chart
+exist *before* anything is actually deployed to AWS, rather than being
+retrofitted onto a live environment. The GitHub repository's first
+remote push is deliberately last of all, after Phase 20's security
+review — see docs/DECISIONS.md ADR-087 and `infra/terraform/README.md`'s
+"Phase 17 / 18 / 19 boundary".
 
 Security work (layered onto the phases above, tracked separately):
 
@@ -488,6 +497,8 @@ to complete verification before starting Phase 10.
 
 ## Phase 17 — Terraform AWS Infrastructure: COMPLETE
 
+## Phase 18 — CI/CD Foundation: COMPLETE
+
 Gemini (Phase 9) remains SKIPPED/OPTIONAL.
 
 ## Phase 15 — OpenTelemetry: COMPLETE (detail)
@@ -675,6 +686,56 @@ worker` targets show UP at `http://localhost:9090/targets`, and open
 `http://localhost:3001` (admin / the configured password) to see the
 provisioned "AgentABI — System Overview" dashboard before starting Phase
 17.
+
+## Phase 18 — CI/CD Foundation: COMPLETE (detail)
+
+CI/CD foundation only (ADR-087) — no AWS resources created, no
+`terraform apply`, no image pushed to any registry, no `helm install`
+against a real cluster, no push to GitHub. Adds `.github/workflows/ci.yml`
+(automatic on every push/PR: backend lint/format/mypy/pytest against real
+Postgres+Neo4j service containers, frontend lint/typecheck/build/vitest,
+Terraform fmt/init/validate for both the `dev` and `bootstrap` roots,
+Gitleaks secret scanning + Trivy dependency/IaC scanning, and a
+push-nothing Docker build-verification job for both Dockerfiles) and
+`.github/workflows/deploy.yml` (manual `workflow_dispatch`-only CD:
+build+push to ECR with immutable git-SHA tags → `helm upgrade --install
+--atomic` → rollout verification, every job gated by a GitHub
+Environment with required reviewers — see ADR-087 for why this is never
+automatic). Adds `infra/terraform/modules/github-oidc` (disabled by
+default — no real GitHub org/repo exists yet) for GitHub Actions → AWS
+OIDC federation, replacing any notion of static `AWS_ACCESS_KEY_ID`/
+`AWS_SECRET_ACCESS_KEY` GitHub secrets, and sets
+`authentication_mode = API_AND_CONFIG_MAP` on the Phase 17 EKS cluster
+resource so an EKS Access Entry can grant that role RBAC scoped to the
+`agentabi` namespace without a Kubernetes/Helm Terraform provider. Adds
+the first Kubernetes manifests in this repository:
+`deploy/helm/agentabi`, a Helm chart covering the API/worker/frontend
+Deployments, a Neo4j StatefulSet with an EBS-backed PVC, a
+`SecretProviderClass` (AWS Secrets Store CSI Driver), and a database
+migration Job wired as a Helm pre-upgrade hook (runs once, before any
+Deployment is touched; `--atomic` rolls the release back if it fails).
+Adds `.github/dependabot.yml` for GitHub Actions/pip/npm, grouped by
+minor/patch to limit PR noise.
+
+Full detail — including the exact secrets-sync mechanism (mounting the
+CSI volume is what triggers the Secrets Manager → Kubernetes Secret
+sync, so the migration Job and both Deployments all mount it even though
+only `envFrom` is read from) and the Phase 17/18/19 boundary — is in
+`docs/ARCHITECTURE.md`'s Phase 18 section and `infra/terraform/README.md`.
+
+**Verification**: `ruff check`/`ruff format --check` ran for real
+against the backend and passed cleanly. `mypy`, `pytest`, the frontend's
+`npm install`/lint/typecheck/build/test, `terraform fmt`/`init`/
+`validate`, `actionlint`, and a real Docker image build were all
+attempted and could not complete in this sandbox — each for a specific,
+confirmed reason (missing installable Python/npm runtime dependencies;
+no `terraform` binary; `proxy.golang.org` and `registry-1.docker.io` not
+actually reachable despite appearing permitted) — documented in full,
+including exactly what non-fabricated substitute checks were run
+instead (YAML parsing, manual Terraform static review continuing Phase
+17's methodology, manual Helm template review), in
+`docs/ARCHITECTURE.md`'s Phase 18 Verification paragraph. Nothing here
+is reported as passing that did not actually run.
 
 ## Phase 17 — Terraform AWS Infrastructure: COMPLETE (detail)
 

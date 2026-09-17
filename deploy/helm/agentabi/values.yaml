@@ -1,0 +1,90 @@
+# Default values for the agentabi chart. Deliberately conservative,
+# cost-conscious demo defaults — see values-demo.yaml for the exact
+# overrides the deploy.yml workflow applies, and infra/terraform/README.md
+# for the AWS-side demo lifecycle these values assume.
+#
+# No real hostnames, ARNs, or credentials are set here — every AWS-facing
+# value is empty/placeholder-shaped and MUST be supplied at deploy time
+# (via --set or an environment-specific values file) from real Terraform
+# outputs. Phase 18 does not have real values to put here; Phase 19 does.
+
+namespace: agentabi
+
+image:
+  registry: "" # e.g. <account-id>.dkr.ecr.<region>.amazonaws.com — set by deploy.yml
+  tag: "" # immutable git commit SHA — set by deploy.yml, never defaults to "latest"
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: agentabi
+  # IRSA role ARN from `terraform output iam_role_arns` (the
+  # `app_workload` role) — grants ECR pull + Secrets Manager read via
+  # the pod's Kubernetes ServiceAccount, no static AWS credentials.
+  roleArn: ""
+
+replicaCount:
+  api: 1
+  worker: 1
+  frontend: 1
+
+resources:
+  api:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  worker:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  frontend:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 250m, memory: 256Mi }
+  neo4j:
+    requests: { cpu: 250m, memory: 1Gi }
+    limits: { cpu: "1", memory: 2Gi }
+
+neo4j:
+  # EBS-backed persistent storage (Phase 17's networking/EKS prepared the
+  # cluster for this; the EBS CSI driver IRSA role already exists —
+  # infra/terraform/modules/iam). gp3 is the current EKS-recommended
+  # default storage class for new EBS-backed volumes.
+  storageClassName: gp3
+  storageSize: 10Gi
+  # Matches docker-compose.yml's local dev default shape (auth via
+  # NEO4J_AUTH secret key, not a literal value here — see secrets.yaml).
+  image: neo4j:5-community
+  plugins: '["apoc"]'
+
+# --- AWS-managed data services (RDS / ElastiCache / MSK) -------------------
+# Hostnames/endpoints only — never credentials. Populated from
+# `terraform output` in environments/dev after Phase 19's apply.
+aws:
+  rdsEndpoint: ""
+  redisEndpoint: ""
+  mskBootstrapBrokers: ""
+  # Secrets Manager secret ARNs/names this chart's SecretProviderClass
+  # mounts (see templates/secretproviderclass.yaml). Populated from
+  # `terraform output secrets_manager_secret_arns` and
+  # `terraform output rds_master_user_secret_arn`.
+  secrets:
+    jwtSigningKey: ""
+    openaiApiKey: ""
+    githubOauthClient: ""
+    githubAppCredentials: ""
+    rdsMasterUserSecret: ""
+
+observability:
+  otelEnabled: false
+  otelExporterEndpoint: "" # e.g. http://otel-collector.observability.svc.cluster.local:4318
+
+ingress:
+  # Off by default — a demo can be verified in-cluster / via port-forward
+  # without a domain. Phase 17's dns module (Route53/ACM) is what this
+  # would attach to once a real domain is configured; see
+  # infra/terraform/README.md.
+  enabled: false
+  className: alb
+  host: ""
+  certificateArn: ""
+
+frontend:
+  publicApiUrl: "" # NEXT_PUBLIC_AGENTABI_API_URL — baked in at image build time, not runtime

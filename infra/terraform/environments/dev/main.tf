@@ -116,3 +116,25 @@ module "dns" {
 
   tags = local.common_tags
 }
+
+# Phase 18: GitHub Actions -> AWS OIDC federation for the CD workflow.
+# Disabled by default — see infra/terraform/modules/github-oidc's
+# variables.tf. Flip github_actions_oidc_enabled to true, and set
+# github_org/github_repository, once this repository is actually pushed
+# to GitHub (deliberately the project's last step).
+module "github_oidc" {
+  source = "../../modules/github-oidc"
+
+  enabled           = var.github_actions_oidc_enabled
+  name_prefix       = local.name_prefix
+  github_org        = var.github_org
+  github_repository = var.github_repository
+
+  allowed_ref_patterns = var.github_actions_allowed_refs
+  allowed_environments = var.github_actions_allowed_environments
+  ecr_repository_arns  = values(module.ecr.repository_arns)
+  eks_cluster_arn      = module.eks.cluster_arn
+  eks_cluster_name     = module.eks.cluster_name
+
+  tags = local.common_tags
+}

@@ -1,0 +1,186 @@
+name: Deploy (recruiter demo)
+
+# Phase 19 CD foundation. NOT wired to run automatically on push — this
+# project uses an on-demand recruiter demo environment (provision -> demo
+# -> tear down), not an always-on deployment, so a deploy only ever
+# happens when a person explicitly asks for one via workflow_dispatch.
+#
+# Prerequisites this workflow assumes (none of which Phase 18 has done):
+#   1. infra/terraform/environments/dev has been applied for real
+#      (Phase 19), so the EKS cluster / ECR repos / RDS / Redis / MSK /
+#      Secrets Manager containers referenced below actually exist.
+#   2. github_actions_oidc_enabled = true has been applied with this
+#      repository's real org/repo (see infra/terraform/modules/github-oidc),
+#      so AWS_DEPLOY_ROLE_ARN below is a real IAM role ARN, not a
+#      placeholder.
+#   3. The repository variables listed under `env:` below are set in
+#      GitHub (Settings -> Secrets and variables -> Actions -> Variables).
+#      None of them are secret values (an IAM role ARN, a cluster name, a
+#      region are not secrets) — they are deliberately repository
+#      *variables*, not *secrets*.
+#   4. A GitHub Environment named "demo" exists with required reviewers
+#      configured, so this workflow's `environment: demo` pauses for a
+#      human approval before anything touches AWS.
+#   5. Application secret values (JWT signing key, OpenAI API key, GitHub
+#      OAuth/App credentials) have already been populated into the empty
+#      Secrets Manager containers Phase 17 created — see
+#      infra/terraform/README.md's "Secrets strategy" — this workflow
+#      never sets or reads their values, only points workloads at the
+#      Secrets Manager ARNs.
+#
+# Phase 18 provides the workflow shape and the Helm chart it drives
+# (deploy/helm/agentabi) so Phase 19 only has to apply Terraform and flip
+# github_actions_oidc_enabled — not design a deployment pipeline.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Immutable image tag to deploy (git commit SHA). Defaults to the SHA of the ref this workflow runs on."
+        required: false
+        type: string
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options: [demo]
+        default: demo
+
+concurrency:
+  # Only one deploy at a time per environment — an in-flight demo
+  # deployment is never superseded mid-rollout by a second dispatch.
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }} # e.g. <account-id>.dkr.ecr.<region>.amazonaws.com
+  K8S_NAMESPACE: agentabi
+  IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+
+jobs:
+  build-and-push:
+    name: Build images and push to ECR
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write # required for OIDC -> AWS federation; no long-lived AWS keys anywhere in this workflow
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Immutable tagging: every image is tagged with the git commit SHA
+      # that produced it (never solely `latest`), so a running workload
+      # is always traceable to an exact revision. `latest` is pushed too,
+      # purely as a human-friendly convenience pointer — nothing here or
+      # in deploy/helm reads it as the canonical deploy target.
+      - name: Build and push API/worker image (same image, different command)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: |
+            ${{ env.ECR_REGISTRY }}/agentabi-api:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/agentabi-api:latest
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: true
+          build-args: |
+            NEXT_PUBLIC_AGENTABI_API_URL=${{ vars.NEXT_PUBLIC_AGENTABI_API_URL }}
+          tags: |
+            ${{ env.ECR_REGISTRY }}/agentabi-frontend:${{ env.IMAGE_TAG }}
+            ${{ env.ECR_REGISTRY }}/agentabi-frontend:latest
+
+  deploy:
+    name: Deploy application (Helm — migration runs as a pre-upgrade hook)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: "v3.16.2"
+
+      # deploy/helm/agentabi/templates/job-migrate.yaml runs `alembic
+      # upgrade head` as a Helm pre-install/pre-upgrade hook — a single
+      # Job, before this release's Deployments are touched. If it fails,
+      # `--atomic` rolls the whole release back rather than leaving a
+      # half-upgraded, half-migrated release in place. See that
+      # template's header comment for the full ordering/failure design.
+      - name: helm upgrade --install (runs migration hook, then deploys)
+        run: |
+          helm upgrade --install agentabi deploy/helm/agentabi \
+            --namespace "$K8S_NAMESPACE" --create-namespace \
+            --set image.tag="${IMAGE_TAG}" \
+            --set image.registry="${ECR_REGISTRY}" \
+            --values deploy/helm/agentabi/values-demo.yaml \
+            --atomic --wait --timeout 10m
+
+  verify:
+    name: Verify deployment
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Rollout status
+        run: |
+          kubectl -n "$K8S_NAMESPACE" rollout status deployment/agentabi-api --timeout=180s
+          kubectl -n "$K8S_NAMESPACE" rollout status deployment/agentabi-worker --timeout=180s
+          kubectl -n "$K8S_NAMESPACE" rollout status deployment/agentabi-frontend --timeout=180s
+
+      # In-cluster health check via a short-lived debug pod hitting the
+      # ClusterIP Service directly — deliberately not an external ALB
+      # URL, which Phase 18 has no real value for (no fabricated
+      # endpoints; see docs/ARCHITECTURE.md).
+      - name: API health check (in-cluster)
+        run: |
+          kubectl -n "$K8S_NAMESPACE" run verify-health --rm -i --restart=Never \
+            --image=curlimages/curl:8.10.1 --command -- \
+            curl -sf http://agentabi-api/api/v1/health

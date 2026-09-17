@@ -65,3 +65,8 @@ output "dns_enabled" {
 output "acm_certificate_arn" {
   value = module.dns.certificate_arn
 }
+
+output "github_actions_deploy_role_arn" {
+  description = "Configure as the AWS_DEPLOY_ROLE_ARN GitHub Actions repository variable. Null until github_actions_oidc_enabled = true."
+  value       = module.github_oidc.deploy_role_arn
+}

@@ -1,0 +1,69 @@
+# Runs `alembic upgrade head` as a Helm pre-install/pre-upgrade hook — a
+# single Job, run once, before Helm touches the API/worker/frontend
+# Deployments. This is what satisfies three of Phase 18's migration
+# requirements directly:
+#   - migration occurs before incompatible application rollout: hooks run
+#     to completion before Helm creates/updates any non-hook resource in
+#     the same release, so the new Deployments are never rolled out on
+#     top of an un-migrated schema.
+#   - failure stops deployment: if this Job fails, Helm marks the
+#     release failed and does not proceed to the Deployments at all
+#     (`helm upgrade --install --atomic` additionally rolls the release
+#     back — see .github/workflows/deploy.yml).
+#   - migrations are not run concurrently by every replica: exactly one
+#     Job, one Pod, `backoffLimit: 0` (fail fast and loud rather than
+#     silently retrying a possibly-partial migration).
+#
+# hook-weight -5 (after configmap/secretproviderclass/serviceaccount at
+# -10, so agentabi-config/agentabi-secrets/the ServiceAccount already
+# exist when this Job starts) but still a hook, so it still runs before
+# every ordinary, non-hook resource in the chart (the Deployments).
+#
+# This Job mounts the same Secrets Store CSI volume the API/worker
+# Deployments do (see their `csi-secrets` volume) — not because alembic
+# reads files from it, but because the CSI driver only performs the
+# actual Secrets Manager -> Kubernetes Secret sync when some pod mounts
+# the volume referencing agentabi-secrets (SecretProviderClass). The
+# first pod to do so (this Job, since it runs first) is what makes
+# envFrom.secretRef.name: agentabi-secrets resolve to real values at all.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agentabi-migrate
+  namespace: {{ .Values.namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: migrate
+          image: {{ include "agentabi.image" (dict "registry" .Values.image.registry "repository" "agentabi-api" "tag" .Values.image.tag) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - >-
+              export POSTGRES_DSN="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${PGHOST}:5432/${PGDATABASE}" &&
+              exec alembic upgrade head
+          envFrom:
+            - configMapRef:
+                name: agentabi-config
+            - secretRef:
+                name: agentabi-secrets
+          volumeMounts:
+            - name: csi-secrets
+              mountPath: /mnt/secrets-store
+              readOnly: true
+      volumes:
+        - name: csi-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: agentabi-secrets
