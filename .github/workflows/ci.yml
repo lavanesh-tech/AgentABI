@@ -222,6 +222,10 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: backend
+          # See deploy.yml's identical note: backend/Dockerfile now also
+          # defines a `test` stage, so this must pin the production
+          # stage explicitly rather than build whatever is last.
+          target: runtime
           push: false
           tags: agentabi-api:ci
           cache-from: type=gha
