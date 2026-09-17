@@ -2246,3 +2246,158 @@ declarations, duplicate-label and undeclared-variable scans, and the
 -check -recursive`, `terraform init -backend=false`, and `terraform
 validate` from `infra/terraform/environments/dev` locally before
 `apply`.
+
+## Phase 18: CI/CD Foundation
+
+**Purpose**: give AgentABI automated quality gates and a safe, reviewable
+path to the on-demand recruiter demo environment described in ADR-086 —
+without ever making a deployment happen automatically, and without this
+repository being pushed to GitHub yet (see ADR-087; GitHub push is
+deliberately this project's last step, after security review).
+
+**CI** (`.github/workflows/ci.yml`, runs on every push/PR, read-only
+`permissions: contents: read` by default): four independent jobs —
+backend (Ruff lint, Ruff format check, mypy strict, pytest against real
+Postgres and Neo4j service containers — the same graceful-skip Neo4j
+integration tests documented in this file's earlier sections run for
+real here, not just skip), frontend (ESLint, `tsc --noEmit`, `vitest
+run`, `next build`), Terraform (`fmt -check -recursive`, `init
+-backend=false`, `validate` — against both the `dev` environment and the
+`bootstrap` root, no AWS credentials configured or needed), and a
+security job (Gitleaks for secret detection; Trivy for filesystem
+dependency vulnerabilities and Terraform IaC misconfiguration — two
+tools, not five, each with one clear job, both deterministic rule/
+signature matching — no repository source is ever sent to an LLM for a
+security decision). A fifth job builds the production `backend/Dockerfile`
+(shared by the API and worker — same image, different command, matching
+docker-compose.yml's existing convention) and `frontend/Dockerfile`
+images to prove they build, with `push: false` — CI never authenticates
+to a registry and never publishes anything.
+
+**CD** (`.github/workflows/deploy.yml`, `workflow_dispatch` only — see
+ADR-087 for why this is never automatic): `build-and-push` (OIDC-
+authenticate to AWS, build and push the same two Dockerfiles to ECR,
+tagged with the immutable git commit SHA plus a `latest` convenience
+pointer) → `deploy` (`helm upgrade --install --atomic` against
+`deploy/helm/agentabi`, which runs the database migration as a Helm
+pre-upgrade hook before any Deployment is touched — see below) →
+`verify` (`kubectl rollout status` on all three Deployments, plus an
+in-cluster health check against `/api/v1/health`). Every job runs under
+a GitHub Environment (`demo`) with required reviewers, so even a
+human-dispatched run still pauses for an explicit approval before
+touching AWS.
+
+**AWS authentication — OIDC, not static keys**: `infra/terraform/modules/github-oidc`
+(new in Phase 18, disabled by default) creates a GitHub Actions OIDC
+identity provider and a `github-actions-deploy` IAM role whose trust
+policy accepts only an OIDC token subject matching an explicit,
+enumerated list (`repo:<org>/<repo>:ref:refs/heads/main`,
+`repo:<org>/<repo>:environment:demo` — `StringLike` against that list,
+never a wildcard). No `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` is ever
+stored as a GitHub secret; `aws-actions/configure-aws-credentials`
+exchanges GitHub's own short-lived OIDC token for temporary AWS
+credentials scoped to that one role, each run. The role's permissions
+are narrow: push to AgentABI's three ECR repos, `eks:DescribeCluster`,
+and cluster RBAC scoped to the `agentabi` namespace only — granted via
+an EKS Access Entry (`aws_eks_access_entry` +
+`aws_eks_access_policy_association`, `AmazonEKSEditPolicy`), the current
+AWS-recommended mechanism, not a cluster-admin binding and not an
+aws-auth ConfigMap edit. This required setting `access_config {
+authentication_mode = "API_AND_CONFIG_MAP" }` on the Phase 17 EKS
+cluster resource — the only Phase 17 infrastructure change Phase 18
+makes.
+
+**Image tagging**: every pushed image is tagged with the git commit SHA
+that produced it (`IMAGE_TAG` in deploy.yml, defaulting to `github.sha`);
+`latest` is pushed alongside it purely as a human-friendly pointer and is
+never what the Helm chart or the migration Job actually deploys — Helm's
+`image.tag` value is always the SHA, so a running workload is always
+traceable to an exact commit.
+
+**Migration discipline**: `deploy/helm/agentabi/templates/job-migrate.yaml`
+runs `alembic upgrade head` as a single Kubernetes Job, wired as a Helm
+`pre-install,pre-upgrade` hook. Helm hooks run to completion before any
+of the release's ordinary (non-hook) resources are touched, so the new
+API/worker/frontend Deployments are never rolled out on top of an
+un-migrated schema — `--atomic` on `helm upgrade --install` additionally
+rolls the whole release back if the hook (or anything else) fails,
+rather than leaving a half-upgraded release in place. `backoffLimit: 0`
+means a failing migration fails loudly once, not silently retries.
+Exactly one Job, one Pod, runs the migration — never once per API
+replica — so N replicas scaling up together can never race the same
+`alembic upgrade`. The chart's `ConfigMap`, `SecretProviderClass`, and
+`ServiceAccount` are themselves earlier-weighted hooks
+(`helm.sh/hook-weight: "-10"` vs. the migration Job's `"-5"`) so they
+exist before the migration Job needs them — Helm's normal creation order
+would otherwise create hook resources *before* any of the release's
+regular resources, including these three.
+
+**Secrets at deploy time**: the Helm chart's `SecretProviderClass`
+(`deploy/helm/agentabi/templates/secretproviderclass.yaml`) uses the AWS
+Secrets and Configuration Provider (ASCP) for the Kubernetes Secrets
+Store CSI Driver — the current AWS-recommended way to get Secrets
+Manager values into a pod without an application-level AWS SDK call.
+Mounting that CSI volume is what makes the driver perform the actual
+Secrets Manager → Kubernetes Secret sync (`secretObjects`), so the
+migration Job and the API/worker Deployments all mount it, even though
+only `envFrom.secretRef` is what the containers' processes actually read
+from. Installing the CSI driver + ASCP add-on onto the cluster is itself
+a Phase 19 step, not something Terraform or this chart installs.
+
+**Kubernetes/Helm boundary**: `deploy/helm/agentabi` is new in Phase 18
+— the first Kubernetes manifests in this repository. It covers
+everything section 11 of the Phase 18 brief asked for (frontend, API,
+worker, Neo4j, configuration, secrets, health probes, resource
+requests/limits, migration execution, observability wiring via
+`OTEL_EXPORTER_OTLP_ENDPOINT`/`OTEL_ENABLED`) as *reusable deployment
+foundation*, not an actual deployment: no `helm install` has been run
+against a real cluster, because no real cluster exists yet in this
+phase. Neo4j is a single-replica `StatefulSet` with an EBS-backed
+`PersistentVolumeClaim` (`storageClassName: gp3`), matching what Phase
+17's EKS/IAM sections already prepared for it (the EBS CSI driver IRSA
+role) — never a standalone EC2 instance.
+
+**What Phase 18 deliberately does not do**: no `terraform apply`, no AWS
+resource of any kind, no Docker image pushed to any registry, no `helm
+install` against a real cluster, no repository push to GitHub. The
+workflows and chart here have been authored and locally/statically
+validated (YAML parsing; hand cross-checking against the underlying
+`ruff`/`mypy`/`pytest`/`terraform` commands; Helm template structural
+review) but have **not** been executed by GitHub Actions, because this
+repository has not been pushed to GitHub. A workflow file existing and
+looking correct is not the same claim as "this CI has run and passed" —
+see this file's Verification paragraph below for exactly what could and
+could not be run in the authoring sandbox.
+
+**Verification**: `ruff check` and `ruff format --check` were run for
+real against the backend and both passed with no fixes needed. `mypy`
+and `pytest` could not run — the backend's runtime dependencies
+(FastAPI, SQLAlchemy, pydantic, httpx, ...) are not installable in this
+sandbox (PyPI package fetches for anything not already present fail;
+same standing restriction noted in every prior phase). The frontend has
+no committed `package-lock.json` (it never has, since Phase 14 — the
+Makefile's own `frontend` target has always used `npm install`, not
+`npm ci`); Phase 18 attempted to generate one and found this sandbox's
+registry access reproducibly, non-transiently 403s on `@playwright/test`
+specifically while every other `package.json` dependency resolves —
+confirmed across multiple retries and both direct and proxied requests.
+Rather than commit a partial or hand-constructed lockfile (which would
+fail `npm ci` for a different, more confusing reason on a real runner),
+`ci.yml`'s frontend job uses `npm install`, matching the repository's
+existing convention, with a comment explaining the gap and what to
+switch back to `npm ci`/`cache: npm` once a real lockfile is committed.
+`terraform fmt`/`init`/`validate` could not run for the same reason
+documented in the Phase 17 section (no `terraform` binary installable —
+confirmed again this phase). `actionlint` could not be installed
+(`proxy.golang.org` is not actually reachable despite appearing in this
+session's `no_proxy` list). Docker image builds could not be verified
+either — a real Docker daemon does start in this sandbox, but
+`registry-1.docker.io` (Docker Hub, the base image for both
+Dockerfiles) is not in the sandbox's network allowlist. Every workflow
+YAML file was parsed successfully with `PyYAML` and manually
+cross-checked (job `needs:` graph, `permissions:` blocks, action
+version pins); every Helm template was reviewed by hand for balanced
+`{{ if }}`/`{{ end }}` pairs, consistent hook annotations, and correct
+`include`/values references, since neither `helm` nor `kubectl` is
+installable here either. None of this is fabricated as a pass — it is
+reported exactly as it ran, or didn't.

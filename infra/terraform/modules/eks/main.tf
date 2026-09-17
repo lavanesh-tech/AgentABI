@@ -87,6 +87,19 @@ resource "aws_eks_cluster" "this" {
     resources = ["secrets"]
   }
 
+  # API_AND_CONFIG_MAP (rather than the legacy CONFIG_MAP-only mode) turns
+  # on EKS Access Entries — the current AWS-recommended way to grant
+  # cluster RBAC to an IAM principal (aws_eks_access_entry +
+  # aws_eks_access_policy_association, both plain AWS-provider resources).
+  # Phase 18 uses this so the GitHub Actions deploy role (see the
+  # github-oidc module) can be bound to `system:masters`-equivalent
+  # deploy permissions without a Kubernetes/Helm Terraform provider or an
+  # aws-auth ConfigMap edit. CONFIG_MAP stays enabled alongside it so any
+  # legacy aws-auth-based mapping keeps working too.
+  access_config {
+    authentication_mode = "API_AND_CONFIG_MAP"
+  }
+
   enabled_cluster_log_types = var.enabled_cluster_log_types
 
   depends_on = [

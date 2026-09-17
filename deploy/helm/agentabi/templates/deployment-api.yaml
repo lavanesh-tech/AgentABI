@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentabi-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: agentabi-api
+    {{- include "agentabi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.api }}
+  selector:
+    matchLabels:
+      app: agentabi-api
+  template:
+    metadata:
+      labels:
+        app: agentabi-api
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: api
+          image: {{ include "agentabi.image" (dict "registry" .Values.image.registry "repository" "agentabi-api" "tag" .Values.image.tag) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The image's own CMD runs uvicorn directly with no DB
+          # credentials baked in; POSTGRES_DSN is only fully known at
+          # pod-start once POSTGRES_USER/POSTGRES_PASSWORD are mounted
+          # from agentabi-secrets, so it's assembled here rather than in
+          # the image or in a plaintext ConfigMap value.
+          command:
+            - sh
+            - -c
+            - >-
+              export POSTGRES_DSN="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${PGHOST}:5432/${PGDATABASE}" &&
+              exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+          envFrom:
+            - configMapRef:
+                name: agentabi-config
+            - secretRef:
+                name: agentabi-secrets
+          ports:
+            - containerPort: 8000
+              name: http
+          # /health is process liveness only (no dependency checks);
+          # /ready additionally confirms Postgres is reachable — see
+          # README.md. Using /health (not /ready) for the liveness probe
+          # so a transient RDS blip restarts nothing; readinessProbe uses
+          # /ready so traffic is only routed once the DB is reachable.
+          livenessProbe:
+            httpGet: { path: /api/v1/health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /api/v1/ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources.api | nindent 12 }}
+          volumeMounts:
+            - name: csi-secrets
+              mountPath: /mnt/secrets-store
+              readOnly: true
+      volumes:
+        - name: csi-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: agentabi-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentabi-api
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    app: agentabi-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000

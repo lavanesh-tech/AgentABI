@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentabi-frontend
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: agentabi-frontend
+    {{- include "agentabi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.frontend }}
+  selector:
+    matchLabels:
+      app: agentabi-frontend
+  template:
+    metadata:
+      labels:
+        app: agentabi-frontend
+    spec:
+      containers:
+        - name: frontend
+          # NEXT_PUBLIC_AGENTABI_API_URL is baked in at image build time
+          # (frontend/Dockerfile's ARG/ENV) — it cannot be changed by a
+          # runtime env var here. deploy.yml passes
+          # vars.NEXT_PUBLIC_AGENTABI_API_URL as a build-arg to
+          # docker/build-push-action, so this chart never tries to
+          # override it at deploy time (that would silently do nothing).
+          image: {{ include "agentabi.image" (dict "registry" .Values.image.registry "repository" "agentabi-frontend" "tag" .Values.image.tag) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 3000
+              name: http
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources.frontend | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentabi-frontend
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    app: agentabi-frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000

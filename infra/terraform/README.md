@@ -91,6 +91,50 @@ Manager secrets — no wildcard resource access, no `AdministratorAccess`
 anywhere). Phase 18 annotates each ServiceAccount with the corresponding
 `eks.amazonaws.com/role-arn` output.
 
+## GitHub Actions → AWS (OIDC)
+
+`modules/github-oidc` (Phase 18) prepares the IAM side of CD: a GitHub
+Actions OIDC identity provider and a `github-actions-deploy` IAM role that
+`.github/workflows/deploy.yml` assumes via `aws-actions/configure-aws-credentials`'s
+OIDC support. No `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` are ever
+stored as GitHub secrets — every deploy run exchanges GitHub's own
+short-lived OIDC token for temporary AWS credentials scoped to this one
+role.
+
+The module is disabled by default (`github_actions_oidc_enabled = false`)
+because this repository has not been pushed to GitHub yet — GitHub push is
+deliberately the project's last step, after security review (see
+docs/DECISIONS.md's Phase 18 ADR). There is no real `github_org`/
+`github_repository` to federate against yet, so nothing here is applied
+until that changes. Once the repository is pushed:
+
+1. Set `github_actions_oidc_enabled = true`, `github_org`, and
+   `github_repository` in `terraform.tfvars` (real values — never
+   placeholders).
+2. Review/narrow `github_actions_allowed_refs` (default
+   `["refs/heads/main"]`) and `github_actions_allowed_environments`
+   (default `["demo"]`) — the trust policy only accepts an OIDC token
+   whose subject matches one of these exactly (`StringLike`, never a
+   wildcard `repo:org/*`).
+3. `terraform apply`, then set the resulting `github_actions_deploy_role_arn`
+   output as the `AWS_DEPLOY_ROLE_ARN` GitHub repository **variable**
+   (not secret — an IAM role ARN isn't sensitive) alongside
+   `AWS_REGION`, `EKS_CLUSTER_NAME`, `ECR_REGISTRY`, and
+   `NEXT_PUBLIC_AGENTABI_API_URL` — see deploy.yml's header comment for
+   the full prerequisite list.
+4. Create a GitHub Environment named `demo` with required reviewers, so
+   deploy.yml's `environment: demo` pauses for a human approval before
+   anything touches AWS.
+
+The role's permissions are narrow: push to AgentABI's three ECR
+repositories, `eks:DescribeCluster` (needed for
+`aws eks update-kubeconfig`), and cluster RBAC scoped to the `agentabi`
+namespace only, granted via an EKS Access Entry
+(`aws_eks_access_entry` + `aws_eks_access_policy_association`,
+`AmazonEKSEditPolicy` — not cluster-admin, not the legacy aws-auth
+ConfigMap). `modules/eks` sets `authentication_mode = API_AND_CONFIG_MAP`
+so Access Entries work without a Kubernetes/Helm Terraform provider.
+
 ## Secrets strategy
 
 Terraform never contains, generates, or stores an application secret
@@ -209,19 +253,29 @@ terraform apply
 # optionally: aws rds restore-db-instance-from-db-snapshot from a preserved final snapshot
 ```
 
-## Phase 17 / Phase 18 boundary
+## Phase 17 / 18 / 19 boundary
 
-Phase 17 (this phase): VPC, EKS cluster + node group, IAM/IRSA
-foundations, ECR, RDS, ElastiCache, MSK, empty Secrets Manager containers,
-optional DNS/ACM, remote-state bootstrap module. **No Kubernetes objects,
-no Helm releases, no application containers, no Neo4j.**
+Phase 17: VPC, EKS cluster + node group, IAM/IRSA foundations, ECR, RDS,
+ElastiCache, MSK, empty Secrets Manager containers, optional DNS/ACM,
+remote-state bootstrap module. **No Kubernetes objects, no Helm releases,
+no application containers, no Neo4j, no CI/CD.**
 
-Phase 18 (not started): install the AWS Load Balancer Controller,
-cluster-autoscaler, and EBS CSI driver into the cluster using the IAM
-roles this phase already created; deploy AgentABI's own Kubernetes
-manifests/Helm charts (API, worker, frontend, Ingress); deploy Neo4j as an
-EBS-backed StatefulSet; wire OpenTelemetry/Prometheus/Grafana into the
-cluster; populate Secrets Manager values.
+Phase 18 (this phase): `.github/workflows/ci.yml` (lint/typecheck/test/
+Terraform-validate/security-scan/Docker-build-only, on every push/PR) and
+`.github/workflows/deploy.yml` (manual `workflow_dispatch` CD foundation);
+`modules/github-oidc` (disabled by default — see above); the
+`deploy/helm/agentabi` Helm chart (API, worker, frontend Deployments,
+Neo4j StatefulSet, a `SecretProviderClass`, and a migration Job that runs
+as a Helm pre-upgrade hook). **Still no real AWS deployment, no
+`terraform apply` against real AWS, no image pushed to ECR, no repository
+push to GitHub.**
+
+Phase 19 (not started): actually `terraform apply` this configuration;
+flip `github_actions_oidc_enabled = true` with real org/repo; install the
+AWS Load Balancer Controller, cluster-autoscaler, EBS CSI driver, and
+Secrets Store CSI Driver (AWS provider) cluster add-ons using the IAM
+roles Phase 17 already created; populate real Secrets Manager values; run
+`deploy.yml` for the first time.
 
 ## Validation
 
@@ -233,6 +287,6 @@ terraform validate
 tflint   # if installed
 ```
 
-See the Phase 17 completion report in docs/ROADMAP.md for what was
+See the Phase 17/18 completion reports in docs/ROADMAP.md for what was
 actually run and what could not be run in the authoring sandbox (no
-`terraform` binary available there — see docs/DECISIONS.md ADR-086).
+`terraform` binary available there — see docs/DECISIONS.md ADR-086/ADR-087).

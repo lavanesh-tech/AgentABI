@@ -126,6 +126,38 @@ variable "create_hosted_zone" {
   default = false
 }
 
+# --- Phase 18: GitHub Actions CD authentication (see infra/terraform/modules/github-oidc) ---
+
+variable "github_actions_oidc_enabled" {
+  description = "Create the GitHub Actions OIDC provider/deploy role. Leave false until this repository is pushed to GitHub — see docs/DECISIONS.md's Phase 18 ADR."
+  type        = bool
+  default     = false
+}
+
+variable "github_org" {
+  description = "GitHub organization/username. Only meaningful once github_actions_oidc_enabled = true. Never set to a placeholder value."
+  type        = string
+  default     = ""
+}
+
+variable "github_repository" {
+  description = "GitHub repository name (without the org/ prefix). Only meaningful once github_actions_oidc_enabled = true."
+  type        = string
+  default     = ""
+}
+
+variable "github_actions_allowed_refs" {
+  description = "Git refs allowed to assume the CD deploy role, e.g. [\"refs/heads/main\"]."
+  type        = list(string)
+  default     = ["refs/heads/main"]
+}
+
+variable "github_actions_allowed_environments" {
+  description = "GitHub Environments (e.g. [\"demo\"]) allowed to assume the CD deploy role, in addition to github_actions_allowed_refs."
+  type        = list(string)
+  default     = ["demo"]
+}
+
 locals {
   name_prefix = "${lower(var.project)}-${var.environment}"
 
