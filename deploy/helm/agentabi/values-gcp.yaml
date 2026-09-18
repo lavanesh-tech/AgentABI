@@ -15,8 +15,9 @@ replicaCount:
   frontend: 1
 
 gcp:
-  postgresHost: "10.232.0.3"
-
+  staticIpName: "agentabi-demo-ip"
+  postgresHost: ""
+  oauthRedirectUri: "http://8.233.188.40/auth/callback"
 redis:
   image: redis:7-alpine
 

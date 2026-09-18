@@ -14,6 +14,7 @@ data:
 
   PGHOST: {{ .Values.gcp.postgresHost | quote }}
   PGDATABASE: "agentabi"
+  GITHUB_OAUTH_REDIRECT_URI: {{ .Values.gcp.oauthRedirectUri | quote }}
 
   REDIS_DSN: "redis://agentabi-redis:6379/0"
 

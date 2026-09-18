@@ -6,6 +6,9 @@ metadata:
   namespace: {{ .Values.namespace }}
   annotations:
     kubernetes.io/ingress.class: gce
+{{- with .Values.gcp.staticIpName }}
+    kubernetes.io/ingress.global-static-ip-name: {{ . | quote }}
+{{- end }}
 spec:
   rules:
     - http:

@@ -39,15 +39,28 @@ export class NetworkError extends Error {
 export type QueryParams = Record<string, string | number | boolean | undefined | null>;
 
 function buildUrl(path: string, params?: QueryParams): string {
-  const url = new URL(`${API_BASE_URL}${path}`);
-  if (params) {
-    for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined && value !== null) {
-        url.searchParams.set(key, String(value));
-      }
+  const base = API_BASE_URL.replace(/\/$/, "");
+  const target = `${base}${path}`;
+
+  if (!params) {
+    return target;
+  }
+
+  const search = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null) {
+      search.set(key, String(value));
     }
   }
-  return url.toString();
+
+  const query = search.toString();
+
+  if (!query) {
+    return target;
+  }
+
+  return `${target}${target.includes("?") ? "&" : "?"}${query}`;
 }
 
 let onUnauthorized: (() => void) | null = null;
