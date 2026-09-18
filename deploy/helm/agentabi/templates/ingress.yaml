@@ -1,36 +1,27 @@
 {{- if .Values.ingress.enabled }}
-# Requires the AWS Load Balancer Controller to be installed on the
-# cluster (its IAM policy/IRSA role already exists —
-# infra/terraform/modules/iam's lb_controller role — installing the
-# controller itself is a Phase 19 cluster add-on step, same boundary as
-# the Secrets Store CSI driver). Off by default: a demo is verifiable
-# without a domain (see values.yaml's ingress.enabled comment).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: agentabi
   namespace: {{ .Values.namespace }}
   annotations:
-    kubernetes.io/ingress.class: {{ .Values.ingress.className }}
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
-    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.ingress.certificateArn | quote }}
+    kubernetes.io/ingress.class: gce
 spec:
   rules:
-    - host: {{ .Values.ingress.host | quote }}
-      http:
+    - http:
         paths:
           - path: /api
             pathType: Prefix
             backend:
               service:
                 name: agentabi-api
-                port: { number: 80 }
+                port:
+                  number: 80
           - path: /
             pathType: Prefix
             backend:
               service:
                 name: agentabi-frontend
-                port: { number: 80 }
+                port:
+                  number: 80
 {{- end }}

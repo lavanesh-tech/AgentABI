@@ -49,3 +49,5 @@ override.tf.json
 
 # --- Logs ---
 *.log
+
+gha-creds-*.json

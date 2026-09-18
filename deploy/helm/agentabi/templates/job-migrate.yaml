@@ -56,14 +56,3 @@ spec:
                 name: agentabi-config
             - secretRef:
                 name: agentabi-secrets
-          volumeMounts:
-            - name: csi-secrets
-              mountPath: /mnt/secrets-store
-              readOnly: true
-      volumes:
-        - name: csi-secrets
-          csi:
-            driver: secrets-store.csi.k8s.io
-            readOnly: true
-            volumeAttributes:
-              secretProviderClass: agentabi-secrets
