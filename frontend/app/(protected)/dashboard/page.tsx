@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useProjects } from "@/features/projects/hooks";
 import { useAuth } from "@/features/auth/AuthProvider";
 import { hasPermission } from "@/lib/permissions";
@@ -28,6 +29,7 @@ const WORKFLOW_STEPS = [
  * itself rather than fabricating global metrics or activity. */
 export default function DashboardPage() {
   const { user } = useAuth();
+  const router = useRouter();
   const projectsQuery = useProjects();
   const canCreate = hasPermission(user?.role ?? null, "project:create");
 
@@ -56,7 +58,7 @@ export default function DashboardPage() {
                 hint="Every AgentABI workflow starts with a project: register components, run a compatibility scan, and a deterministic PASS/WARN/BLOCK decision follows automatically."
                 action={
                   canCreate ? (
-                    <Button onClick={() => (window.location.href = "/projects")}>
+                    <Button onClick={() => router.push("/projects")}>
                       Create your first project
                     </Button>
                   ) : (

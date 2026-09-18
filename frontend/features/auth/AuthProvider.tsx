@@ -87,12 +87,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     registerUnauthorizedHandler(clearSession);
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+
+    const refreshTimer = window.setTimeout(() => {
+      void refresh();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(refreshTimer);
+    };
+  }, [clearSession, refresh]);
 
   const loginWithGitHub = useCallback(() => {
-    window.location.href = `${API_BASE_URL}/auth/github/login`;
+    const loginUrl = `${API_BASE_URL.replace(/\/$/, "")}/auth/github/login`;
+    // External backend OAuth endpoint, not an internal Next.js route.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.assign(loginUrl);
   }, []);
 
   const completeLogin = useCallback((result: GitHubCallbackResponse) => {

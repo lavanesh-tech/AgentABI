@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import clsx from "clsx";
 import { MoonIcon, SunIcon, SystemThemeIcon } from "./icons";
 
@@ -17,27 +17,48 @@ function applyTheme(pref: ThemePref) {
   }
 }
 
+function readStoredTheme(): ThemePref {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored === "light" || stored === "dark" || stored === "system") {
+      return stored;
+    }
+  } catch {
+    // localStorage unavailable — use system theme.
+  }
+  return "system";
+}
+
+function subscribeMounted() {
+  return () => {};
+}
+
+function getClientMounted() {
+  return true;
+}
+
+function getServerMounted() {
+  return false;
+}
+
 /** Light / dark / system control. Persisted in localStorage (a per-viewer
  * UI preference, not app data) and applied by setting `data-theme` on
  * <html> — the attribute globals.css's dark-mode selectors already key
  * off. "system" removes the attribute so the existing
  * prefers-color-scheme media query takes back over. */
 export function ThemeToggle() {
-  const [pref, setPref] = useState<ThemePref>("system");
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(
+    subscribeMounted,
+    getClientMounted,
+    getServerMounted,
+  );
 
-  useEffect(() => {
-    setMounted(true);
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (stored === "light" || stored === "dark" || stored === "system") {
-        setPref(stored);
-        applyTheme(stored);
-      }
-    } catch {
-      // localStorage unavailable — stay on the "system" default.
+  const [pref, setPref] = useState<ThemePref>(() => {
+    if (typeof window === "undefined") {
+      return "system";
     }
-  }, []);
+    return readStoredTheme();
+  });
 
   function choose(next: ThemePref) {
     setPref(next);
