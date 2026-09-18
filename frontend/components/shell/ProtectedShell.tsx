@@ -15,7 +15,8 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const [navOpen, setNavOpen] = useState(false);
+  const [navOpenPath, setNavOpenPath] = useState<string | null>(null);
+  const navOpen = navOpenPath === pathname;
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -35,11 +36,6 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
     }
   }, [isLoading, isAuthenticated, user, router]);
 
-  // Close the mobile drawer automatically on navigation.
-  useEffect(() => {
-    setNavOpen(false);
-  }, [pathname]);
-
   if (isLoading || !isAuthenticated || user?.requires_onboarding) {
     return (
       <div className="flex h-screen items-center justify-center bg-surface">
@@ -58,17 +54,17 @@ export function ProtectedShell({ children }: { children: React.ReactNode }) {
         <div className="fixed inset-0 z-40 md:hidden">
           <div
             className="absolute inset-0 bg-ink/30"
-            onClick={() => setNavOpen(false)}
+            onClick={() => setNavOpenPath(null)}
             aria-hidden
           />
           <div className="absolute inset-y-0 left-0">
-            <Sidebar onNavigate={() => setNavOpen(false)} />
+            <Sidebar onNavigate={() => setNavOpenPath(null)} />
           </div>
         </div>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header onOpenNav={() => setNavOpen(true)} />
+        <Header onOpenNav={() => setNavOpenPath(pathname)} />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           <div className="mx-auto max-w-7xl">{children}</div>
         </main>
