@@ -52,17 +52,6 @@ spec:
             periodSeconds: 15
           resources:
             {{- toYaml .Values.resources.worker | nindent 12 }}
-          volumeMounts:
-            - name: csi-secrets
-              mountPath: /mnt/secrets-store
-              readOnly: true
-      volumes:
-        - name: csi-secrets
-          csi:
-            driver: secrets-store.csi.k8s.io
-            readOnly: true
-            volumeAttributes:
-              secretProviderClass: agentabi-secrets
 ---
 apiVersion: v1
 kind: Service

@@ -1,192 +1,257 @@
-name: Deploy (recruiter demo)
-
-# Phase 19 CD foundation. NOT wired to run automatically on push — this
-# project uses an on-demand recruiter demo environment (provision -> demo
-# -> tear down), not an always-on deployment, so a deploy only ever
-# happens when a person explicitly asks for one via workflow_dispatch.
-#
-# Prerequisites this workflow assumes (none of which Phase 18 has done):
-#   1. infra/terraform/environments/dev has been applied for real
-#      (Phase 19), so the EKS cluster / ECR repos / RDS / Redis / MSK /
-#      Secrets Manager containers referenced below actually exist.
-#   2. github_actions_oidc_enabled = true has been applied with this
-#      repository's real org/repo (see infra/terraform/modules/github-oidc),
-#      so AWS_DEPLOY_ROLE_ARN below is a real IAM role ARN, not a
-#      placeholder.
-#   3. The repository variables listed under `env:` below are set in
-#      GitHub (Settings -> Secrets and variables -> Actions -> Variables).
-#      None of them are secret values (an IAM role ARN, a cluster name, a
-#      region are not secrets) — they are deliberately repository
-#      *variables*, not *secrets*.
-#   4. A GitHub Environment named "demo" exists with required reviewers
-#      configured, so this workflow's `environment: demo` pauses for a
-#      human approval before anything touches AWS.
-#   5. Application secret values (JWT signing key, OpenAI API key, GitHub
-#      OAuth/App credentials) have already been populated into the empty
-#      Secrets Manager containers Phase 17 created — see
-#      infra/terraform/README.md's "Secrets strategy" — this workflow
-#      never sets or reads their values, only points workloads at the
-#      Secrets Manager ARNs.
-#
-# Phase 18 provides the workflow shape and the Helm chart it drives
-# (deploy/helm/agentabi) so Phase 19 only has to apply Terraform and flip
-# github_actions_oidc_enabled — not design a deployment pipeline.
+name: Deploy AgentABI Demo to GKE
 
 on:
   workflow_dispatch:
-    inputs:
-      image_tag:
-        description: "Immutable image tag to deploy (git commit SHA). Defaults to the SHA of the ref this workflow runs on."
-        required: false
-        type: string
-      environment:
-        description: "Target environment"
-        required: true
-        type: choice
-        options: [demo]
-        default: demo
 
 concurrency:
-  # Only one deploy at a time per environment — an in-flight demo
-  # deployment is never superseded mid-rollout by a second dispatch.
-  group: deploy-${{ inputs.environment }}
+  group: agentabi-demo-deploy
   cancel-in-progress: false
 
 permissions:
   contents: read
+  id-token: write
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
-  ECR_REGISTRY: ${{ vars.ECR_REGISTRY }} # e.g. <account-id>.dkr.ecr.<region>.amazonaws.com
-  K8S_NAMESPACE: agentabi
-  IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION }}
+  GKE_CLUSTER: ${{ vars.GKE_CLUSTER }}
+  REGISTRY: ${{ vars.GAR_REGISTRY }}
+  NAMESPACE: agentabi
+  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
-  build-and-push:
-    name: Build images and push to ECR
+  build:
+    name: Build and Push Images
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    permissions:
-      contents: read
-      id-token: write # required for OIDC -> AWS federation; no long-lived AWS keys anywhere in this workflow
+    environment: demo
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
         with:
-          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-      - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Configure Artifact Registry authentication
+        run: |
+          gcloud auth configure-docker \
+            "${REGION}-docker.pkg.dev" \
+            --quiet
 
-      # Immutable tagging: every image is tagged with the git commit SHA
-      # that produced it (never solely `latest`), so a running workload
-      # is always traceable to an exact revision. `latest` is pushed too,
-      # purely as a human-friendly convenience pointer — nothing here or
-      # in deploy/helm reads it as the canonical deploy target.
-      - name: Build and push API/worker image (same image, different command)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend
         uses: docker/build-push-action@v6
         with:
           context: backend
-          # Explicit: backend/Dockerfile also defines a `test` stage (dev/
-          # test tooling only, never meant to leave a developer's machine
-          # or CI) — pinning this stops it from ever being what gets
-          # tagged and pushed to ECR just because it's defined last in
-          # the file.
           target: runtime
+          platforms: linux/amd64
           push: true
           tags: |
-            ${{ env.ECR_REGISTRY }}/agentabi-api:${{ env.IMAGE_TAG }}
-            ${{ env.ECR_REGISTRY }}/agentabi-api:latest
+            ${{ env.REGISTRY }}/agentabi-api:${{ env.IMAGE_TAG }}
 
-      - name: Build and push frontend image
+      - name: Build and push frontend
         uses: docker/build-push-action@v6
         with:
           context: frontend
+          platforms: linux/amd64
           push: true
           build-args: |
-            NEXT_PUBLIC_AGENTABI_API_URL=${{ vars.NEXT_PUBLIC_AGENTABI_API_URL }}
+            NEXT_PUBLIC_AGENTABI_API_URL=/api/v1
           tags: |
-            ${{ env.ECR_REGISTRY }}/agentabi-frontend:${{ env.IMAGE_TAG }}
-            ${{ env.ECR_REGISTRY }}/agentabi-frontend:latest
+            ${{ env.REGISTRY }}/agentabi-frontend:${{ env.IMAGE_TAG }}
 
   deploy:
-    name: Deploy application (Helm — migration runs as a pre-upgrade hook)
-    needs: build-and-push
+    name: Deploy to GKE
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    permissions:
-      contents: read
-      id-token: write
+    needs: build
+    environment: demo
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
         with:
-          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
-
-      - uses: azure/setup-helm@v4
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
         with:
-          version: "v3.16.2"
+          project_id: ${{ env.PROJECT_ID }}
+          install_components: gke-gcloud-auth-plugin
 
-      # deploy/helm/agentabi/templates/job-migrate.yaml runs `alembic
-      # upgrade head` as a Helm pre-install/pre-upgrade hook — a single
-      # Job, before this release's Deployments are touched. If it fails,
-      # `--atomic` rolls the whole release back rather than leaving a
-      # half-upgraded, half-migrated release in place. See that
-      # template's header comment for the full ordering/failure design.
-      - name: helm upgrade --install (runs migration hook, then deploys)
+      - name: Get GKE credentials
         run: |
-          helm upgrade --install agentabi deploy/helm/agentabi \
-            --namespace "$K8S_NAMESPACE" --create-namespace \
-            --set image.tag="${IMAGE_TAG}" \
-            --set image.registry="${ECR_REGISTRY}" \
-            --values deploy/helm/agentabi/values-demo.yaml \
-            --atomic --wait --timeout 10m
+          gcloud container clusters get-credentials \
+            "$GKE_CLUSTER" \
+            --region "$REGION" \
+            --project "$PROJECT_ID"
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
+
+      - name: Create namespace
+        run: |
+          kubectl create namespace "$NAMESPACE" \
+            --dry-run=client \
+            -o yaml | kubectl apply -f -
+
+      - name: Sync Secret Manager values to Kubernetes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OPENAI_API_KEY="$(gcloud secrets versions access latest \
+            --secret=agentabi-demo-openai-api-key \
+            --project="$PROJECT_ID")"
+
+          JWT_SECRET="$(gcloud secrets versions access latest \
+            --secret=agentabi-demo-jwt-signing-key \
+            --project="$PROJECT_ID")"
+
+          POSTGRES_PASSWORD="$(gcloud secrets versions access latest \
+            --secret=agentabi-demo-postgres-password \
+            --project="$PROJECT_ID")"
+
+          NEO4J_PASSWORD="$(gcloud secrets versions access latest \
+            --secret=agentabi-demo-neo4j-password \
+            --project="$PROJECT_ID")"
+
+          GITHUB_OAUTH_CLIENT_ID="$(gcloud secrets versions access latest \
+            --secret=agentabi-demo-github-oauth-client-id \
+            --project="$PROJECT_ID")"
+
+          GITHUB_OAUTH_CLIENT_SECRET="$(gcloud secrets versions access latest \
+            --secret=agentabi-demo-github-oauth-client-secret \
+            --project="$PROJECT_ID")"
+
+          kubectl -n "$NAMESPACE" create secret generic agentabi-secrets \
+            --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY" \
+            --from-literal=JWT_SECRET="$JWT_SECRET" \
+            --from-literal=POSTGRES_USER=agentabi \
+            --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            --from-literal=NEO4J_PASSWORD="$NEO4J_PASSWORD" \
+            --from-literal=NEO4J_AUTH="neo4j/${NEO4J_PASSWORD}" \
+            --from-literal=GITHUB_OAUTH_CLIENT_ID="$GITHUB_OAUTH_CLIENT_ID" \
+            --from-literal=GITHUB_OAUTH_CLIENT_SECRET="$GITHUB_OAUTH_CLIENT_SECRET" \
+            --dry-run=client \
+            -o yaml | kubectl apply -f -
+
+          unset OPENAI_API_KEY
+          unset JWT_SECRET
+          unset POSTGRES_PASSWORD
+          unset NEO4J_PASSWORD
+          unset GITHUB_OAUTH_CLIENT_ID
+          unset GITHUB_OAUTH_CLIENT_SECRET
+
+      - name: Helm lint
+        run: |
+          helm lint deploy/helm/agentabi \
+            --values deploy/helm/agentabi/values-gcp.yaml \
+            --set image.registry="$REGISTRY" \
+            --set image.tag="$IMAGE_TAG" \
+            --set ingress.enabled=false
+
+      - name: Deploy
+        run: |
+          helm upgrade --install agentabi \
+            deploy/helm/agentabi \
+            --namespace "$NAMESPACE" \
+            --values deploy/helm/agentabi/values-gcp.yaml \
+            --set image.registry="$REGISTRY" \
+            --set image.tag="$IMAGE_TAG" \
+            --set ingress.enabled=false \
+            --wait \
+            --timeout 15m
 
   verify:
-    name: Verify deployment
-    needs: deploy
+    name: Verify GKE Deployment
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    permissions:
-      contents: read
-      id-token: write
+    needs: deploy
+    environment: demo
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
         with:
-          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          install_components: gke-gcloud-auth-plugin
 
-      - name: Rollout status
+      - name: Get GKE credentials
         run: |
-          kubectl -n "$K8S_NAMESPACE" rollout status deployment/agentabi-api --timeout=180s
-          kubectl -n "$K8S_NAMESPACE" rollout status deployment/agentabi-worker --timeout=180s
-          kubectl -n "$K8S_NAMESPACE" rollout status deployment/agentabi-frontend --timeout=180s
+          gcloud container clusters get-credentials \
+            "$GKE_CLUSTER" \
+            --region "$REGION" \
+            --project "$PROJECT_ID"
 
-      # In-cluster health check via a short-lived debug pod hitting the
-      # ClusterIP Service directly — deliberately not an external ALB
-      # URL, which Phase 18 has no real value for (no fabricated
-      # endpoints; see docs/ARCHITECTURE.md).
-      - name: API health check (in-cluster)
+      - name: Verify Kubernetes workloads
         run: |
-          kubectl -n "$K8S_NAMESPACE" run verify-health --rm -i --restart=Never \
-            --image=curlimages/curl:8.10.1 --command -- \
-            curl -sf http://agentabi-api/api/v1/health
+          kubectl -n "$NAMESPACE" rollout status \
+            deployment/agentabi-api \
+            --timeout=300s
+
+          kubectl -n "$NAMESPACE" rollout status \
+            deployment/agentabi-worker \
+            --timeout=300s
+
+          kubectl -n "$NAMESPACE" rollout status \
+            deployment/agentabi-frontend \
+            --timeout=300s
+
+          kubectl -n "$NAMESPACE" rollout status \
+            deployment/agentabi-kafka \
+            --timeout=300s
+
+          kubectl -n "$NAMESPACE" rollout status \
+            deployment/agentabi-redis \
+            --timeout=300s
+
+          kubectl -n "$NAMESPACE" rollout status \
+            statefulset/agentabi-neo4j \
+            --timeout=600s
+
+      - name: Verify API readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          API_POD="$(kubectl -n "$NAMESPACE" get pod \
+            -l app=agentabi-api \
+            -o jsonpath='{.items[0].metadata.name}')"
+
+          READY="$(kubectl -n "$NAMESPACE" exec "$API_POD" -- \
+            curl -fsS http://localhost:8000/api/v1/ready)"
+
+          echo "$READY"
+
+          echo "$READY" | grep -q '"database":true'
+          echo "$READY" | grep -q '"graph":true'
+          echo "$READY" | grep -q '"kafka":true'
+
+          echo "AgentABI deployment verified."

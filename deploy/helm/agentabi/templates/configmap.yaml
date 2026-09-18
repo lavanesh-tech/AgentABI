@@ -1,6 +1,3 @@
-# Non-secret configuration only. Every credential-bearing value (DB
-# password, JWT secret, OpenAI/GitHub credentials) comes from
-# agentabi-secrets (see secretproviderclass.yaml), never from here.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,19 +8,19 @@ metadata:
     "helm.sh/hook-weight": "-10"
     "helm.sh/hook-delete-policy": before-hook-creation
 data:
-  ENVIRONMENT: "staging" # closest fit of app.core.config.Settings' local/test/staging/production for an on-demand demo
+  ENVIRONMENT: "staging"
   LOG_LEVEL: "INFO"
   LOG_FORMAT: "json"
-  PGHOST: {{ .Values.aws.rdsEndpoint | quote }}
+
+  PGHOST: {{ .Values.gcp.postgresHost | quote }}
   PGDATABASE: "agentabi"
-  REDIS_DSN: {{ printf "redis://%s:6379/0" .Values.aws.redisEndpoint | quote }}
+
+  REDIS_DSN: "redis://agentabi-redis:6379/0"
+
   NEO4J_URI: "bolt://agentabi-neo4j:7687"
   NEO4J_USER: "neo4j"
-  KAFKA_BOOTSTRAP_SERVERS: {{ .Values.aws.mskBootstrapBrokers | quote }}
+
+  KAFKA_BOOTSTRAP_SERVERS: "agentabi-kafka:9092"
   KAFKA_ENABLED: "true"
-  OTEL_ENABLED: {{ .Values.observability.otelEnabled | quote }}
-  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.observability.otelExporterEndpoint | quote }}
-  OTEL_SERVICE_NAME_API: "agentabi-api"
-  OTEL_SERVICE_NAME_WORKER: "agentabi-worker"
-  CORS_ALLOW_ORIGINS: {{ .Values.ingress.host | default "" | quote }}
-  GITHUB_OAUTH_REDIRECT_URI: {{ printf "https://%s/api/v1/auth/github/callback" (.Values.ingress.host | default "localhost:8000") | quote }}
+
+  OTEL_ENABLED: "false"
