@@ -8,11 +8,15 @@ import uuid
 import pytest
 
 from app.audit.actions import AuditAction
+from app.models import Organization
 from app.services.audit_service import AuditService
 
 
 async def test_record_appends_and_is_queryable(session):
-    org_id = uuid.uuid4()
+    org = Organization(name="Acme", slug=f"acme-{uuid.uuid4().hex[:8]}")
+    session.add(org)
+    await session.flush()
+    org_id = org.id
     service = AuditService(session)
     service.record(
         action=AuditAction.PROJECT_CREATED,
@@ -29,7 +33,10 @@ async def test_record_appends_and_is_queryable(session):
 
 
 async def test_metadata_is_redacted(session):
-    org_id = uuid.uuid4()
+    org = Organization(name="Acme", slug=f"acme-{uuid.uuid4().hex[:8]}")
+    session.add(org)
+    await session.flush()
+    org_id = org.id
     service = AuditService(session)
     service.record(
         action=AuditAction.LOGIN_FAILURE,
@@ -45,7 +52,10 @@ async def test_metadata_is_redacted(session):
 async def test_immutable_update_is_rejected(session):
     from sqlalchemy.exc import DBAPIError
 
-    org_id = uuid.uuid4()
+    org = Organization(name="Acme", slug=f"acme-{uuid.uuid4().hex[:8]}")
+    session.add(org)
+    await session.flush()
+    org_id = org.id
     service = AuditService(session)
     event = service.record(action=AuditAction.LOGIN_SUCCESS, organization_id=org_id)
     await session.commit()
@@ -56,8 +66,12 @@ async def test_immutable_update_is_rejected(session):
 
 
 async def test_tenant_scoping_excludes_other_organizations(session):
-    org_a = uuid.uuid4()
-    org_b = uuid.uuid4()
+    org_a_row = Organization(name="Org A", slug=f"org-a-{uuid.uuid4().hex[:8]}")
+    org_b_row = Organization(name="Org B", slug=f"org-b-{uuid.uuid4().hex[:8]}")
+    session.add_all([org_a_row, org_b_row])
+    await session.flush()
+    org_a = org_a_row.id
+    org_b = org_b_row.id
     service = AuditService(session)
     service.record(action=AuditAction.LOGIN_SUCCESS, organization_id=org_a)
     service.record(action=AuditAction.LOGIN_SUCCESS, organization_id=org_b)
@@ -68,7 +82,10 @@ async def test_tenant_scoping_excludes_other_organizations(session):
 
 
 async def test_pagination(session):
-    org_id = uuid.uuid4()
+    org = Organization(name="Acme", slug=f"acme-{uuid.uuid4().hex[:8]}")
+    session.add(org)
+    await session.flush()
+    org_id = org.id
     service = AuditService(session)
     for _ in range(5):
         service.record(action=AuditAction.SCAN_TRIGGERED, organization_id=org_id)

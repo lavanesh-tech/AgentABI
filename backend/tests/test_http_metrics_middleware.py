@@ -37,11 +37,11 @@ def test_route_template_falls_back_to_bounded_label_when_unmatched():
 
 
 async def test_middleware_records_request_with_normalized_route_and_status():
+    from httpx import ASGITransport, AsyncClient
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import PlainTextResponse
     from starlette.routing import Route
-    from starlette.testclient import TestClient
 
     from app.core.metrics_middleware import PrometheusMetricsMiddleware
 
@@ -61,9 +61,13 @@ async def test_middleware_records_request_with_normalized_route_and_status():
 
     metrics.record_http_request = _spy  # type: ignore[assignment]
     try:
-        client = TestClient(app)
-        response = client.get("/items/abc-123")
-        assert response.status_code == 200
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://test",
+        ) as client:
+            response = await client.get("/items/abc-123")
+            assert response.status_code == 200
     finally:
         metrics.record_http_request = original  # type: ignore[assignment]
 

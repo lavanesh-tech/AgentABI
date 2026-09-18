@@ -116,7 +116,7 @@ class RiskService:
                 span.set_attribute("agentabi.risk_decision", record.decision)
                 span.set_attribute("agentabi.risk_score", record.score)
             # Mandatory (spec §8/§38): observed exactly as produced by
-            # app.risk.engine.evaluate() via _run_assessment_impl above —
+            # the deterministic risk engine via _run_assessment_impl above —
             # never recalculated or re-derived here.
             record_risk_decision(
                 settings,
@@ -222,7 +222,13 @@ def _build_context(
     report: DifferentialReportRecord | None,
     blast_radius_total: int | None,
 ) -> RiskContext:
-    compatibility_status = scan.status.value if scan is not None else None
+    compatibility_status = (
+        scan.status.value
+        if scan is not None and hasattr(scan.status, "value")
+        else str(scan.status)
+        if scan is not None
+        else None
+    )
     compatibility_breaking_count = scan.breaking_count if scan is not None else 0
     compatibility_critical_count = (
         sum(1 for c in scan.changes if c.severity == Severity.CRITICAL) if scan is not None else 0

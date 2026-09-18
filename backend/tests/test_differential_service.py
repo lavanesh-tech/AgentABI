@@ -12,11 +12,19 @@ from app.domain.exceptions import (
     ReplayNotFound,
     ReplayNotReadyForDifferential,
 )
-from app.models import Component, ComponentVersion, Organization, Project
+from app.models import (
+    Component,
+    ComponentVersion,
+    Organization,
+    Project,
+    Trajectory,
+    TrajectoryEvent,
+)
 from app.models.replay_run import ReplayRun
 from app.models.replay_step import ReplayStep
 from app.replay.models import ReplayStatus, StepKind, StepStatus
 from app.services.differential_service import DifferentialService
+from app.trajectory.models import EventType, TrajectoryStatus
 
 
 async def _setup(session, org_slug="acme", project_slug="payments"):
@@ -42,20 +50,41 @@ async def _setup(session, org_slug="acme", project_slug="payments"):
     session.add_all([v5, v6])
     await session.flush()
 
-    trajectory_id = uuid.uuid4()  # not FK-validated here; only replay_runs.source_trajectory_id
-    # points at a real trajectories row in production — this helper
-    # skips full trajectory recording (already covered by
-    # test_replay_service.py) to keep differential setup focused.
-    return org, project, component, v5, v6, trajectory_id
+    trajectory = Trajectory(
+        organization_id=org.id,
+        project_id=project.id,
+        status=TrajectoryStatus.COMPLETED,
+    )
+    session.add(trajectory)
+    await session.flush()
+
+    event = TrajectoryEvent(
+        trajectory_id=trajectory.id,
+        sequence_number=0,
+        event_type=EventType.RUN_STARTED,
+        content_hash="c" * 64,
+    )
+    session.add(event)
+    await session.flush()
+
+    return org, project, component, v5, v6, trajectory.id, event.id
 
 
 async def _replay_run(
-    session, org, project, component, baseline_version, candidate_version, status, steps
+    session,
+    org,
+    project,
+    component,
+    baseline_version,
+    candidate_version,
+    status,
+    steps,
+    trajectory_id,
 ):
     run = ReplayRun(
         organization_id=org.id,
         project_id=project.id,
-        source_trajectory_id=uuid.uuid4(),
+        source_trajectory_id=trajectory_id,
         component_id=component.id,
         baseline_component_version_id=baseline_version.id,
         candidate_component_version_id=candidate_version.id,
@@ -89,13 +118,29 @@ def _step(seq, event_id, **overrides):
 
 
 async def test_same_project_comparison_accepted(session):
-    org, project, component, v5, v6, _ = await _setup(session)
-    event = uuid.uuid4()
+    org, project, component, v5, v6, trajectory_id, event_id = await _setup(session)
+    event = event_id
     baseline = await _replay_run(
-        session, org, project, component, v5, v5, ReplayStatus.COMPLETED, [_step(0, event)]
+        session,
+        org,
+        project,
+        component,
+        v5,
+        v5,
+        ReplayStatus.COMPLETED,
+        [_step(0, event)],
+        trajectory_id,
     )
     candidate = await _replay_run(
-        session, org, project, component, v5, v6, ReplayStatus.COMPLETED, [_step(0, event)]
+        session,
+        org,
+        project,
+        component,
+        v5,
+        v6,
+        ReplayStatus.COMPLETED,
+        [_step(0, event)],
+        trajectory_id,
     )
 
     service = DifferentialService(session)
@@ -108,9 +153,17 @@ async def test_same_project_comparison_accepted(session):
 
 
 async def test_cross_project_replay_id_rejected(session):
-    org, project, component, v5, v6, _ = await _setup(session)
+    org, project, component, v5, v6, trajectory_id, event_id = await _setup(session)
     baseline = await _replay_run(
-        session, org, project, component, v5, v5, ReplayStatus.COMPLETED, [_step(0, uuid.uuid4())]
+        session,
+        org,
+        project,
+        component,
+        v5,
+        v5,
+        ReplayStatus.COMPLETED,
+        [_step(0, event_id)],
+        trajectory_id,
     )
     other_project_id = uuid.uuid4()
 
@@ -122,8 +175,10 @@ async def test_cross_project_replay_id_rejected(session):
 
 
 async def test_non_completed_replay_rejected(session):
-    org, project, component, v5, v6, _ = await _setup(session)
-    pending = await _replay_run(session, org, project, component, v5, v6, ReplayStatus.PENDING, [])
+    org, project, component, v5, v6, trajectory_id, event_id = await _setup(session)
+    pending = await _replay_run(
+        session, org, project, component, v5, v6, ReplayStatus.PENDING, [], trajectory_id
+    )
 
     service = DifferentialService(session)
     with pytest.raises(ReplayNotReadyForDifferential):
@@ -133,13 +188,29 @@ async def test_non_completed_replay_rejected(session):
 
 
 async def test_idempotent_retry_returns_same_report(session):
-    org, project, component, v5, v6, _ = await _setup(session)
-    event = uuid.uuid4()
+    org, project, component, v5, v6, trajectory_id, event_id = await _setup(session)
+    event = event_id
     baseline = await _replay_run(
-        session, org, project, component, v5, v5, ReplayStatus.COMPLETED, [_step(0, event)]
+        session,
+        org,
+        project,
+        component,
+        v5,
+        v5,
+        ReplayStatus.COMPLETED,
+        [_step(0, event)],
+        trajectory_id,
     )
     candidate = await _replay_run(
-        session, org, project, component, v5, v6, ReplayStatus.COMPLETED, [_step(0, event)]
+        session,
+        org,
+        project,
+        component,
+        v5,
+        v6,
+        ReplayStatus.COMPLETED,
+        [_step(0, event)],
+        trajectory_id,
     )
 
     service = DifferentialService(session)
@@ -153,20 +224,36 @@ async def test_idempotent_retry_returns_same_report(session):
 
 
 async def test_get_report_not_found_raises(session):
-    org, project, component, v5, v6, _ = await _setup(session)
+    org, project, component, v5, v6, trajectory_id, event_id = await _setup(session)
     service = DifferentialService(session)
     with pytest.raises(DifferentialReportNotFound):
         await service.get_report(project.id, uuid.uuid4())
 
 
 async def test_analyzer_cannot_mutate_replay_evidence(session):
-    org, project, component, v5, v6, _ = await _setup(session)
-    event = uuid.uuid4()
+    org, project, component, v5, v6, trajectory_id, event_id = await _setup(session)
+    event = event_id
     baseline = await _replay_run(
-        session, org, project, component, v5, v5, ReplayStatus.COMPLETED, [_step(0, event)]
+        session,
+        org,
+        project,
+        component,
+        v5,
+        v5,
+        ReplayStatus.COMPLETED,
+        [_step(0, event)],
+        trajectory_id,
     )
     candidate = await _replay_run(
-        session, org, project, component, v5, v6, ReplayStatus.COMPLETED, [_step(0, event)]
+        session,
+        org,
+        project,
+        component,
+        v5,
+        v6,
+        ReplayStatus.COMPLETED,
+        [_step(0, event)],
+        trajectory_id,
     )
     service = DifferentialService(session)
 

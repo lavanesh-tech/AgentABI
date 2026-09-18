@@ -11,14 +11,14 @@ than `request.url.path`.
 from __future__ import annotations
 
 import time
+from typing import Any
 
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import Response
-from starlette.types import ASGIApp
+from starlette.routing import Match
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
-from app.observability import record_http_request, track_http_in_progress
+from app.observability import metrics
 
 _UNMATCHED_ROUTE = "unmatched"
 
@@ -34,40 +34,72 @@ def _route_template(request: Request) -> str:
     return path if isinstance(path, str) else _UNMATCHED_ROUTE
 
 
+def _resolve_route_template(app: ASGIApp, scope: Scope) -> str:
+    """Resolve the matched route template without using the raw URL path."""
+    current: Any = app
+    seen: set[int] = set()
+
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+
+        routes = getattr(current, "routes", None)
+        if routes is not None:
+            for route in routes:
+                match, _ = route.matches(scope)
+                if match == Match.FULL:
+                    path = getattr(route, "path", None)
+                    if isinstance(path, str):
+                        return path
+            return _UNMATCHED_ROUTE
+
+        current = getattr(current, "app", None)
+
+    return _UNMATCHED_ROUTE
+
+
 # See app/core/security_headers.py's comment: Starlette's
 # `BaseHTTPMiddleware` resolves to `Any` under this project's mypy
 # configuration, so strict mode's `disallow_subclassing_any` flags
 # subclassing it — a genuine third-party typing gap with no cleaner
 # typed boundary available.
-class PrometheusMetricsMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
-    """Outermost middleware layer (added last in `create_app()`) so its
-    timing covers the full request/response cycle, including every other
-    middleware. A no-op pass-through when `METRICS_ENABLED=false` —
-    metrics recording itself never raises (spec §24)."""
+class PrometheusMetricsMiddleware:
+    """Pure ASGI metrics middleware.
+
+    Using pure ASGI instead of BaseHTTPMiddleware lets the downstream
+    Starlette/FastAPI router mutate the shared ASGI scope with the matched
+    route template. After the request completes we can therefore record
+    the bounded route pattern rather than the raw path.
+    """
 
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
-        super().__init__(app)
+        self.app = app
         self._settings = settings
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        if not self._settings.metrics_enabled:
-            return await call_next(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not self._settings.metrics_enabled:
+            await self.app(scope, receive, send)
+            return
 
-        method = request.method
+        method = scope.get("method", "UNKNOWN")
         start = time.monotonic()
         status_code = 500
-        # Route isn't known until routing has run inside call_next(), so
-        # the in-progress gauge is labeled by method only up front and
-        # the final counter/histogram use the resolved route afterward.
-        with track_http_in_progress(self._settings, method=method):
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        with metrics.track_http_in_progress(self._settings, method=method):
             try:
-                response = await call_next(request)
-                status_code = response.status_code
-                return response
+                await self.app(scope, receive, send_wrapper)
             finally:
+                request = Request(scope)
                 route = _route_template(request)
+                if route == _UNMATCHED_ROUTE:
+                    route = _resolve_route_template(self.app, scope)
                 duration = time.monotonic() - start
-                record_http_request(
+                metrics.record_http_request(
                     self._settings,
                     method=method,
                     route=route,

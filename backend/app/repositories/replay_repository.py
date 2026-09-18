@@ -156,4 +156,4 @@ class ReplayRepository:
             .values(**values)
         )
         result = await self._session.execute(stmt)
-        return bool(result.rowcount)
+        return bool(getattr(result, "rowcount", 0))

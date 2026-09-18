@@ -77,6 +77,7 @@ async def _scan(session, org, project, component, *, status, changes=()):
         )
     await session.flush()
     await session.commit()
+    await session.refresh(scan, attribute_names=["changes"])
     return scan
 
 

@@ -11,7 +11,7 @@ variable "secret_names" {
     Phase 18 bootstrap step) after apply. See infra/terraform/README.md
     "Secrets strategy".
   EOT
-  type = list(string)
+  type        = list(string)
   default = [
     "jwt-signing-key",
     "openai-api-key",

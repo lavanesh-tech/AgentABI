@@ -67,7 +67,13 @@ async def test_me_response_never_exposes_secret_fields(client, session):
     token = _token_for(user)
     response = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
     body = response.json()
-    assert set(body.keys()) == {"user_id", "email", "organization_id", "role"}
+    assert set(body.keys()) == {
+        "user_id",
+        "email",
+        "organization_id",
+        "role",
+        "requires_onboarding",
+    }
 
 
 async def test_me_with_expired_token_returns_401(client, session):

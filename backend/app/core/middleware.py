@@ -17,7 +17,7 @@ CORRELATION_ID_HEADER = "X-Correlation-ID"
 # configuration, so strict mode's `disallow_subclassing_any` flags
 # subclassing it — a genuine third-party typing gap with no cleaner
 # typed boundary available.
-class CorrelationIdMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
     """Reads/generates a correlation ID per request, binds it to structlog's
     contextvars so every log line emitted while handling the request
     includes it, and echoes it back on the response header."""

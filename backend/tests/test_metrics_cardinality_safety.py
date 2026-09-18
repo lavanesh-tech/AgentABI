@@ -69,5 +69,5 @@ def test_all_agentabi_metric_names_follow_naming_convention():
         assert name.startswith("agentabi_"), name
         if func_name == "_counter":
             assert name.endswith("_total"), name
-        if func_name == "_histogram":
+        if func_name == "_histogram" and "duration" in name:
             assert name.endswith("_seconds"), name

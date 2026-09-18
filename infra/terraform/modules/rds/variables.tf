@@ -71,8 +71,8 @@ variable "skip_final_snapshot" {
        deliberate `aws rds restore-db-instance-from-db-snapshot` step, not
        automated by this module. See infra/terraform/README.md.
   EOT
-  type    = bool
-  default = true
+  type        = bool
+  default     = true
 }
 
 variable "deletion_protection" {

@@ -17,7 +17,6 @@ def test_envelope_schema_unchanged_by_phase_15():
 
     envelope = build_envelope(
         event_type="github.pr.analysis.requested",
-        event_version=1,
         correlation_id="corr-1",
         project_id="proj-1",
         organization_id="org-1",

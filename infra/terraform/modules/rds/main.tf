@@ -41,8 +41,8 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_eks" {
 
 resource "aws_vpc_security_group_egress_rule" "rds_all" {
   security_group_id = aws_security_group.rds.id
-  ip_protocol        = "-1"
-  cidr_ipv4          = "0.0.0.0/0"
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 resource "aws_db_instance" "this" {
@@ -53,9 +53,9 @@ resource "aws_db_instance" "this" {
 
   allocated_storage     = var.allocated_storage_gb
   max_allocated_storage = var.max_allocated_storage_gb
-  storage_type           = "gp3"
-  storage_encrypted      = true
-  kms_key_id              = aws_kms_key.rds.arn
+  storage_type          = "gp3"
+  storage_encrypted     = true
+  kms_key_id            = aws_kms_key.rds.arn
 
   db_name  = var.database_name
   username = var.master_username
@@ -65,8 +65,8 @@ resource "aws_db_instance" "this" {
 
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.rds.id]
-  publicly_accessible     = false
-  multi_az                = var.multi_az
+  publicly_accessible    = false
+  multi_az               = var.multi_az
 
   backup_retention_period = var.backup_retention_days
   copy_tags_to_snapshot   = true

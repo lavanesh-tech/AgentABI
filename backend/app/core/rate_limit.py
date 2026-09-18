@@ -23,6 +23,7 @@ deterministic, clock-injectable fake for unit tests only (mirrors
 `InMemoryOAuthStateStore`, Phase B) — never wired into production.
 """
 
+import inspect
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -90,10 +91,11 @@ class RedisRateLimiter:
         # client identity) attached — only the fact that a check ran.
         with start_span("redis.rate_limit.check", kind="client"):
             try:
-                current = await self._redis.eval(_FIXED_WINDOW_SCRIPT, 1, key, window_seconds)
+                result = self._redis.eval(_FIXED_WINDOW_SCRIPT, 1, key, str(window_seconds))
+                raw_current = await result if inspect.isawaitable(result) else result
             except Exception as exc:  # redis.RedisError, connection errors, ...
                 raise RateLimiterUnavailable() from exc
-        current = int(current)
+        current = int(raw_current)
         allowed = current <= limit
         return RateLimitResult(
             allowed=allowed,

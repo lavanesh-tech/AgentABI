@@ -35,8 +35,8 @@ variable "allowed_ref_patterns" {
     subject in the trust policy. Keep this narrow — this role can push
     images to ECR and modify EKS workloads.
   EOT
-  type    = list(string)
-  default = ["refs/heads/main"]
+  type        = list(string)
+  default     = ["refs/heads/main"]
 }
 
 variable "allowed_environments" {
@@ -48,8 +48,8 @@ variable "allowed_environments" {
     explicit approval. Empty by default — no environment-scoped trust
     until one is configured in GitHub and named here.
   EOT
-  type    = list(string)
-  default = []
+  type        = list(string)
+  default     = []
 }
 
 variable "ecr_repository_arns" {

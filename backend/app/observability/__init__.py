@@ -7,6 +7,7 @@ rather than touching `opentelemetry.*`/`prometheus_client` directly, so
 initialization, redaction, and the disabled/no-op path all live in one
 place (spec §4)."""
 
+from app.observability import metrics
 from app.observability.metrics import (
     record_analysis_run,
     record_dependency_call,
@@ -41,6 +42,7 @@ from app.observability.tracing import (
 )
 
 __all__ = [
+    "metrics",
     "setup_tracing",
     "shutdown_tracing",
     "get_tracer",

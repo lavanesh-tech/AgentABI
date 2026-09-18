@@ -16,6 +16,7 @@ _BLOCKED_SUBSTRINGS = (
     "refresh_token",
     "id_token",
     "api_key",
+    "api-key",
     "apikey",
     "openai_api_key",
     "github_client_secret",
