@@ -62,10 +62,16 @@ variable "eks_node_max_size" {
   default = 4
 }
 
+variable "eks_cluster_endpoint_public_access" {
+  description = "Whether the EKS Kubernetes API is publicly reachable. Secure default is false."
+  type        = bool
+  default     = false
+}
+
 variable "eks_cluster_endpoint_public_access_cidrs" {
-  description = "Restrict this to your own IP/CIDR beyond a short-lived demo (default is open for convenience)."
+  description = "CIDRs allowed when EKS public API access is explicitly enabled."
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = []
 }
 
 variable "rds_instance_class" {

@@ -7,6 +7,17 @@ resource "aws_s3_bucket" "state" {
   bucket = "${lower(var.project)}-terraform-state-${var.bucket_suffix}"
 }
 
+resource "aws_kms_key" "terraform_state" {
+  description             = "${var.project} Terraform state encryption"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
+}
+
+resource "aws_kms_alias" "terraform_state" {
+  name          = "alias/${lower(var.project)}-terraform-state"
+  target_key_id = aws_kms_key.terraform_state.key_id
+}
+
 resource "aws_s3_bucket_versioning" "state" {
   bucket = aws_s3_bucket.state.id
   versioning_configuration {
@@ -18,7 +29,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
   bucket = aws_s3_bucket.state.id
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm = "aws:kms"
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.terraform_state.arn
     }
     bucket_key_enabled = true
   }
