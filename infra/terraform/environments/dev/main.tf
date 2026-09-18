@@ -22,13 +22,14 @@ module "eks" {
   private_subnet_ids = module.networking.private_app_subnet_ids
   public_subnet_ids  = module.networking.public_subnet_ids
 
-  cluster_endpoint_public_access_cidrs = var.eks_cluster_endpoint_public_access_cidrs
+  cluster_endpoint_public_access = var.eks_cluster_endpoint_public_access
 
-  node_instance_types = var.eks_node_instance_types
-  node_capacity_type  = var.eks_node_capacity_type
-  node_desired_size   = var.eks_node_desired_size
-  node_min_size       = var.eks_node_min_size
-  node_max_size       = var.eks_node_max_size
+  cluster_endpoint_public_access_cidrs = var.eks_cluster_endpoint_public_access_cidrs
+  node_instance_types                  = var.eks_node_instance_types
+  node_capacity_type                   = var.eks_node_capacity_type
+  node_desired_size                    = var.eks_node_desired_size
+  node_min_size                        = var.eks_node_min_size
+  node_max_size                        = var.eks_node_max_size
 
   tags = local.common_tags
 }

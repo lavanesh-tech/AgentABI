@@ -39,11 +39,6 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_eks" {
   ip_protocol                  = "tcp"
 }
 
-resource "aws_vpc_security_group_egress_rule" "rds_all" {
-  security_group_id = aws_security_group.rds.id
-  ip_protocol       = "-1"
-  cidr_ipv4         = "0.0.0.0/0"
-}
 
 resource "aws_db_instance" "this" {
   identifier     = "${var.name_prefix}-postgres"

@@ -55,11 +55,6 @@ resource "aws_security_group" "cluster_additional" {
   }
 }
 
-resource "aws_vpc_security_group_egress_rule" "cluster_additional_all" {
-  security_group_id = aws_security_group.cluster_additional.id
-  ip_protocol       = "-1"
-  cidr_ipv4         = "0.0.0.0/0"
-}
 
 resource "aws_cloudwatch_log_group" "cluster" {
   name              = "/aws/eks/${var.name_prefix}/cluster"
