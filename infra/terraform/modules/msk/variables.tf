@@ -35,8 +35,8 @@ variable "deployment_mode" {
     Neither mode's actual dollar cost is estimated here — see AWS's MSK
     pricing page / Pricing Calculator, linked in infra/terraform/README.md.
   EOT
-  type    = string
-  default = "serverless"
+  type        = string
+  default     = "serverless"
 
   validation {
     condition     = contains(["serverless", "provisioned"], var.deployment_mode)

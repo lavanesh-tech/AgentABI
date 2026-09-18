@@ -27,8 +27,8 @@ resource "aws_vpc_security_group_ingress_rule" "redis_from_eks" {
 
 resource "aws_vpc_security_group_egress_rule" "redis_all" {
   security_group_id = aws_security_group.redis.id
-  ip_protocol        = "-1"
-  cidr_ipv4          = "0.0.0.0/0"
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 data "aws_secretsmanager_secret_version" "auth_token" {
@@ -38,7 +38,7 @@ data "aws_secretsmanager_secret_version" "auth_token" {
 
 resource "aws_elasticache_replication_group" "this" {
   replication_group_id = "${var.name_prefix}-cache"
-  description           = "AgentABI cache/broker (${var.engine})"
+  description          = "AgentABI cache/broker (${var.engine})"
 
   engine         = var.engine
   engine_version = var.engine_version
@@ -48,7 +48,7 @@ resource "aws_elasticache_replication_group" "this" {
   automatic_failover_enabled = var.automatic_failover_enabled
   multi_az_enabled           = var.automatic_failover_enabled
 
-  subnet_group_name = aws_elasticache_subnet_group.this.name
+  subnet_group_name  = aws_elasticache_subnet_group.this.name
   security_group_ids = [aws_security_group.redis.id]
 
   at_rest_encryption_enabled = true

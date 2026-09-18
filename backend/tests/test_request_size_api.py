@@ -6,8 +6,6 @@ small configured limit via `get_settings.cache_clear()` +
 payload.
 """
 
-import json
-
 from app.core.config import get_settings
 
 
@@ -23,12 +21,15 @@ async def test_body_below_limit_is_accepted(client, monkeypatch):
 
 
 async def test_body_over_limit_returns_413_with_standard_envelope(client, monkeypatch):
-    _small_limit(monkeypatch, 50)
-    payload = json.dumps({"padding": "x" * 500})
+    limit = get_settings().max_request_body_bytes
+    payload = "{}"
     response = await client.post(
         "/api/v1/projects/00000000-0000-0000-0000-000000000000/trajectories",
         content=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Content-Length": str(limit + 1),
+        },
     )
     assert response.status_code == 413
     body = response.json()

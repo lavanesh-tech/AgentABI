@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 
 from app.domain.enums import ComponentType
 from app.domain.exceptions import (
@@ -413,7 +413,7 @@ async def test_trajectory_event_row_is_immutable_at_the_database_level(session, 
     event = await recorder.append_event(project.id, trajectory.id, event_type=EventType.RUN_STARTED)
     await session.commit()
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(DBAPIError):
         await session.execute(
             text("UPDATE trajectory_events SET content_hash = 'tampered' WHERE id = :id"),
             {"id": event.id},

@@ -61,7 +61,13 @@ async def test_auth_me_response_never_contains_secret_fields(client, session):
     body = response.json()
     # Explicit typed response model — no raw ORM fields beyond what
     # AuthMeResponse declares.
-    assert set(body.keys()) == {"user_id", "email", "organization_id", "role"}
+    assert set(body.keys()) == {
+        "user_id",
+        "email",
+        "organization_id",
+        "role",
+        "requires_onboarding",
+    }
 
 
 async def test_github_callback_error_response_never_contains_secrets(client):

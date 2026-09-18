@@ -24,11 +24,22 @@ from app.models import Component, ComponentVersion, GitHubRepositoryMapping, Org
 from app.services.github_pr_analysis_service import GitHubPullRequestAnalysisService
 
 
-async def _setup(session, *, github_repository_id=123456789, with_versions=True):
-    org = Organization(name="Acme", slug="acme")
+async def _setup(
+    session,
+    *,
+    github_repository_id=123456789,
+    with_versions=True,
+    org_slug="acme",
+    project_slug="payments",
+):
+    org = Organization(name=org_slug.title(), slug=org_slug)
     session.add(org)
     await session.flush()
-    project = Project(organization_id=org.id, name="Payments", slug="payments")
+    project = Project(
+        organization_id=org.id,
+        name=project_slug.title(),
+        slug=project_slug,
+    )
     session.add(project)
     await session.flush()
     component = Component(
@@ -243,7 +254,10 @@ async def test_cross_org_repository_mapping_is_not_reachable(session):
 
     org, project, component, mapping = await _setup(session, github_repository_id=1)
     other_org, other_project, other_component, other_mapping = await _setup(
-        session, github_repository_id=2
+        session,
+        github_repository_id=2,
+        org_slug="beta",
+        project_slug="other-payments",
     )
 
     candidate = ComponentVersion(
@@ -375,10 +389,7 @@ async def test_publish_failed_retry_republishes_without_recomputing_risk(session
     )
 
     class _FailOnSecondCall(FakeGitHubChecksClient):
-        async def create_check_run(self, request):
-            result = await super().create_check_run(request)
-            if len(self.calls) == 1:
-                return result
+        async def update_check_run(self, *, repository_full_name, check_run_id, request):
             raise GitHubAPIUnavailable("simulated")
 
     checks = _FailOnSecondCall()

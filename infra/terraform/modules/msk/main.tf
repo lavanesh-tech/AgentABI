@@ -45,14 +45,14 @@ resource "aws_vpc_security_group_ingress_rule" "msk_tls" {
 
 resource "aws_vpc_security_group_egress_rule" "msk_all" {
   security_group_id = aws_security_group.msk.id
-  ip_protocol        = "-1"
-  cidr_ipv4          = "0.0.0.0/0"
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 # --- Serverless (cost-conscious default) -----------------------------------
 
 resource "aws_msk_serverless_cluster" "this" {
-  count       = var.deployment_mode == "serverless" ? 1 : 0
+  count        = var.deployment_mode == "serverless" ? 1 : 0
   cluster_name = "${var.name_prefix}-msk"
 
   vpc_config {

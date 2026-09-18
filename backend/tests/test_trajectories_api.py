@@ -3,22 +3,56 @@ the `client` + `session` fixtures)."""
 
 import uuid
 
-from app.models import Organization, Project
+from app.auth.jwt import encode_token
+from app.core.config import get_settings
+from app.models import (
+    Organization,
+    OrganizationMember,
+    OrganizationRole,
+    Project,
+    User,
+)
 
 
-async def _make_project(session, *, org_slug="acme", project_slug="payments") -> Project:
+async def _make_project(session, client, *, org_slug="acme", project_slug="payments") -> Project:
     org = Organization(name=org_slug.title(), slug=org_slug)
-    session.add(org)
+    user = User(
+        email=f"{org_slug}-{uuid.uuid4().hex[:8]}@example.com",
+        full_name="Test Admin",
+        is_active=True,
+    )
+    session.add_all([org, user])
     await session.flush()
-    project = Project(organization_id=org.id, name=project_slug.title(), slug=project_slug)
-    session.add(project)
-    await session.flush()
+
+    project = Project(
+        organization_id=org.id,
+        name=project_slug.title(),
+        slug=project_slug,
+    )
+    membership = OrganizationMember(
+        organization_id=org.id,
+        user_id=user.id,
+        role=OrganizationRole.ADMIN,
+    )
+    session.add_all([project, membership])
     await session.commit()
+
+    settings = get_settings()
+    token = encode_token(
+        subject=str(user.id),
+        secret=settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+        issuer=settings.jwt_issuer,
+        audience=settings.jwt_audience,
+        expires_in_seconds=3600,
+        organization_id=str(org.id),
+    )
+    client.headers.update({"Authorization": f"Bearer {token}"})
     return project
 
 
 async def test_start_trajectory_returns_201(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     response = await client.post(
         f"/api/v1/projects/{project.id}/trajectories",
         json={"external_run_id": "run-1", "environment": "production"},
@@ -31,7 +65,7 @@ async def test_start_trajectory_returns_201(client, session):
 
 
 async def test_start_trajectory_retry_same_external_run_id_returns_same_trajectory(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     payload = {"external_run_id": "run-1", "environment": "production"}
     first = await client.post(f"/api/v1/projects/{project.id}/trajectories", json=payload)
     second = await client.post(f"/api/v1/projects/{project.id}/trajectories", json=payload)
@@ -41,7 +75,7 @@ async def test_start_trajectory_retry_same_external_run_id_returns_same_trajecto
 
 
 async def test_start_trajectory_conflicting_retry_returns_409(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     await client.post(
         f"/api/v1/projects/{project.id}/trajectories",
         json={"external_run_id": "run-1", "environment": "production"},
@@ -54,7 +88,7 @@ async def test_start_trajectory_conflicting_retry_returns_409(client, session):
 
 
 async def test_append_valid_event_returns_201(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
 
@@ -69,7 +103,7 @@ async def test_append_valid_event_returns_201(client, session):
 
 
 async def test_append_invalid_event_returns_422(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
 
@@ -81,7 +115,7 @@ async def test_append_invalid_event_returns_422(client, session):
 
 
 async def test_append_reserved_event_type_returns_422(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
 
@@ -93,7 +127,7 @@ async def test_append_reserved_event_type_returns_422(client, session):
 
 
 async def test_retrieve_ordered_events(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
 
@@ -119,7 +153,7 @@ async def test_retrieve_ordered_events(client, session):
 
 
 async def test_complete_trajectory_returns_200(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
 
@@ -134,7 +168,7 @@ async def test_complete_trajectory_returns_200(client, session):
 
 
 async def test_fail_trajectory_returns_200(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
 
@@ -149,7 +183,7 @@ async def test_fail_trajectory_returns_200(client, session):
 
 
 async def test_append_after_completion_returns_409(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
     await client.post(f"/api/v1/projects/{project.id}/trajectories/{trajectory_id}/complete")
@@ -162,7 +196,7 @@ async def test_append_after_completion_returns_409(client, session):
 
 
 async def test_invalid_transition_returns_409(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
     await client.post(f"/api/v1/projects/{project.id}/trajectories/{trajectory_id}/complete")
@@ -174,15 +208,22 @@ async def test_invalid_transition_returns_409(client, session):
 
 
 async def test_missing_trajectory_returns_404(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     response = await client.get(f"/api/v1/projects/{project.id}/trajectories/{uuid.uuid4()}")
     assert response.status_code == 404
 
 
 async def test_cross_project_isolation(client, session):
-    project_a = await _make_project(session, org_slug="acme", project_slug="proj-a")
-    project_b = await _make_project(session, org_slug="beta", project_slug="proj-b")
-    start = await client.post(f"/api/v1/projects/{project_a.id}/trajectories", json={})
+    project_a = await _make_project(session, client, org_slug="acme", project_slug="proj-a")
+    headers_a = {"Authorization": client.headers["Authorization"]}
+
+    project_b = await _make_project(session, client, org_slug="beta", project_slug="proj-b")
+
+    start = await client.post(
+        f"/api/v1/projects/{project_a.id}/trajectories",
+        json={},
+        headers=headers_a,
+    )
     trajectory_id = start.json()["id"]
 
     response = await client.get(f"/api/v1/projects/{project_b.id}/trajectories/{trajectory_id}")
@@ -190,7 +231,7 @@ async def test_cross_project_isolation(client, session):
 
 
 async def test_list_pagination_and_status_filter(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     for _ in range(3):
         await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     completed_start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
@@ -213,7 +254,7 @@ async def test_list_pagination_and_status_filter(client, session):
 
 
 async def test_redaction_visible_in_retrieved_representation(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
 
@@ -250,7 +291,7 @@ async def test_redaction_visible_in_retrieved_representation(client, session):
 
 
 async def test_event_count_reflects_appended_events(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
     assert start.json()["event_count"] == 0
@@ -268,7 +309,7 @@ async def test_event_count_reflects_appended_events(client, session):
 
 
 async def test_list_trajectories_reports_correct_event_count_per_item(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     empty = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     populated = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     populated_id = populated.json()["id"]
@@ -289,7 +330,7 @@ async def test_list_trajectories_reports_correct_event_count_per_item(client, se
 
 
 async def test_complete_trajectory_reports_correct_event_count(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
     await client.post(
@@ -305,7 +346,7 @@ async def test_complete_trajectory_reports_correct_event_count(client, session):
 
 
 async def test_fail_trajectory_reports_correct_event_count(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]
     for event_type in ("run_started", "agent_started"):
@@ -323,7 +364,7 @@ async def test_fail_trajectory_reports_correct_event_count(client, session):
 
 
 async def test_idempotent_retry_reports_existing_event_count(client, session):
-    project = await _make_project(session)
+    project = await _make_project(session, client)
     payload = {"external_run_id": "run-1", "environment": "production"}
     first = await client.post(f"/api/v1/projects/{project.id}/trajectories", json=payload)
     trajectory_id = first.json()["id"]

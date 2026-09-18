@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from opentelemetry.sdk.trace.sampling import Sampler
 
 from app.core.config import Settings
 from app.observability.redaction import safe_attributes
@@ -77,6 +78,7 @@ def setup_tracing(settings: Settings) -> None:
             }
         )
 
+        sampler: Sampler
         if settings.otel_traces_sampler == "always_on":
             sampler = ALWAYS_ON
         elif settings.otel_traces_sampler == "always_off":

@@ -9,7 +9,7 @@ when one is bound via `bind_correlation_id`, which request middleware
 
 import logging
 import sys
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -39,6 +39,27 @@ def _add_trace_context(logger: Any, method_name: str, event_dict: dict[str, Any]
 _NOISY_DEBUG_LOGGERS: tuple[str, ...] = ("aiokafka",)
 
 
+class _MessageOnlyFormatter(logging.Formatter):
+    """Emit only structlog's already-rendered message.
+
+    structlog.processors.format_exc_info serializes exception information
+    into the rendered event. The stdlib Formatter would otherwise append
+    LogRecord.exc_info a second time as a raw multiline traceback, which
+    breaks one-line JSON logging.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        exc_info = record.exc_info
+        exc_text = record.exc_text
+        record.exc_info = None
+        record.exc_text = None
+        try:
+            return super().format(record)
+        finally:
+            record.exc_info = exc_info
+            record.exc_text = exc_text
+
+
 def configure_logging(settings: Settings) -> None:
     """Configure stdlib logging + structlog once, at process startup."""
 
@@ -46,7 +67,10 @@ def configure_logging(settings: Settings) -> None:
         format="%(message)s",
         stream=sys.stdout,
         level=getattr(logging, settings.log_level),
+        force=True,
     )
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(_MessageOnlyFormatter("%(message)s"))
 
     # `logging.basicConfig`'s `level` sets the *root* logger, so every
     # library that never calls its own `setLevel()` — aiokafka included —
@@ -97,12 +121,12 @@ def configure_logging(settings: Settings) -> None:
         wrapper_class=structlog.stdlib.BoundLogger,
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),
-        cache_logger_on_first_use=True,
+        cache_logger_on_first_use=False,
     )
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
-    return structlog.get_logger(name)
+    return cast(structlog.stdlib.BoundLogger, structlog.get_logger(name).bind())
 
 
 def bind_correlation_id(correlation_id: str) -> None:

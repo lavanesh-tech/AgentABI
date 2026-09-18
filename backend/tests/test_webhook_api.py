@@ -141,12 +141,16 @@ async def test_conflicting_duplicate_delivery_returns_409(client, session, monke
 
 
 async def test_rate_limiting_still_applies(client, session, monkeypatch):
-    monkeypatch.setenv("RATE_LIMIT_MUTATION_REQUESTS", "2")
-    monkeypatch.setenv("RATE_LIMIT_MUTATION_WINDOW_SECONDS", "60")
     _configure(monkeypatch)
 
+    # Route dependencies are created when the FastAPI router is imported,
+    # so exercise the route's real configured startup limit.
+    from app.core.config import get_settings
+
+    limit = get_settings().rate_limit_mutation_requests
+
     statuses = []
-    for i in range(4):
+    for i in range(limit + 2):
         payload = f'{{"zen": "{i}"}}'.encode()
         response = await client.post(
             "/api/v1/github/webhook",

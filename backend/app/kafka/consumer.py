@@ -86,7 +86,7 @@ class KafkaEventConsumer:
         # spec §10/§13: extract W3C context from Kafka headers before
         # starting this message's span, so it's a child of the
         # producer's span rather than the start of a new trace.
-        parent_context = extract_trace_context(getattr(message, "headers", None))
+        parent_context = extract_trace_context(message.headers)
         process_start = time.monotonic()
         with start_span(
             "agentabi.kafka.consume",

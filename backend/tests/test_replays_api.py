@@ -4,16 +4,37 @@ FastAPI/httpx, unavailable in this sandbox — see docs/DECISIONS.md."""
 
 import uuid
 
-from app.models import Component, ComponentVersion, Organization, Project
+from app.auth.jwt import encode_token
+from app.core.config import get_settings
+from app.models import (
+    Component,
+    ComponentVersion,
+    Organization,
+    OrganizationMember,
+    OrganizationRole,
+    Project,
+    User,
+)
 
 
-async def _setup(session, *, org_slug="acme", project_slug="payments"):
+async def _setup(session, client, *, org_slug="acme", project_slug="payments"):
     org = Organization(name=org_slug.title(), slug=org_slug)
-    session.add(org)
+    user = User(
+        email=f"{org_slug}-{uuid.uuid4().hex[:8]}@example.com",
+        full_name="Test Admin",
+        is_active=True,
+    )
+    session.add_all([org, user])
     await session.flush()
-    project = Project(organization_id=org.id, name=project_slug.title(), slug=project_slug)
+
+    project = Project(
+        organization_id=org.id,
+        name=project_slug.title(),
+        slug=project_slug,
+    )
     session.add(project)
     await session.flush()
+
     component = Component(
         organization_id=org.id,
         project_id=project.id,
@@ -21,13 +42,41 @@ async def _setup(session, *, org_slug="acme", project_slug="payments"):
         slug="authorize-payment-tool",
         name="AuthorizePaymentTool",
     )
-    session.add(component)
+    membership = OrganizationMember(
+        organization_id=org.id,
+        user_id=user.id,
+        role=OrganizationRole.ADMIN,
+    )
+    session.add_all([component, membership])
     await session.flush()
-    v5 = ComponentVersion(component_id=component.id, version="5", content={}, checksum="a" * 64)
-    v6 = ComponentVersion(component_id=component.id, version="6", content={}, checksum="b" * 64)
+
+    v5 = ComponentVersion(
+        component_id=component.id,
+        version="5",
+        content={},
+        checksum="a" * 64,
+    )
+    v6 = ComponentVersion(
+        component_id=component.id,
+        version="6",
+        content={},
+        checksum="b" * 64,
+    )
     session.add_all([v5, v6])
-    await session.flush()
     await session.commit()
+
+    settings = get_settings()
+    token = encode_token(
+        subject=str(user.id),
+        secret=settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+        issuer=settings.jwt_issuer,
+        audience=settings.jwt_audience,
+        expires_in_seconds=3600,
+        organization_id=str(org.id),
+    )
+    client.headers.update({"Authorization": f"Bearer {token}"})
+
     return project, component, v5, v6
 
 
@@ -62,7 +111,7 @@ async def _completed_trajectory_via_api(client, project_id, component_id, baseli
 
 
 async def test_create_replay_returns_201_with_plan(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
 
     response = await client.post(
@@ -81,7 +130,7 @@ async def test_create_replay_returns_201_with_plan(client, session):
 
 
 async def test_create_replay_idempotency_key_retry_returns_same_replay(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
     payload = {
         "source_trajectory_id": trajectory_id,
@@ -95,13 +144,13 @@ async def test_create_replay_idempotency_key_retry_returns_same_replay(client, s
 
 
 async def test_get_missing_replay_returns_404(client, session):
-    project, _c, _v5, _v6 = await _setup(session)
+    project, _c, _v5, _v6 = await _setup(session, client)
     response = await client.get(f"/api/v1/projects/{project.id}/replays/{uuid.uuid4()}")
     assert response.status_code == 404
 
 
 async def test_execute_replay_without_executor_returns_503(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
     create = await client.post(
         f"/api/v1/projects/{project.id}/replays",
@@ -120,7 +169,7 @@ async def test_execute_replay_without_executor_returns_503(client, session):
 
 
 async def test_execute_twice_returns_409_on_second_call(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
     create = await client.post(
         f"/api/v1/projects/{project.id}/replays",
@@ -137,7 +186,7 @@ async def test_execute_twice_returns_409_on_second_call(client, session):
 
 
 async def test_list_steps_ordered_by_sequence(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
     create = await client.post(
         f"/api/v1/projects/{project.id}/replays",
@@ -158,8 +207,14 @@ async def test_list_steps_ordered_by_sequence(client, session):
 
 
 async def test_cross_project_isolation(client, session):
-    project_a, component_a, v5_a, v6_a = await _setup(session, org_slug="acme", project_slug="a")
-    project_b, _c, _v5, _v6 = await _setup(session, org_slug="beta", project_slug="b")
+    project_a, component_a, v5_a, v6_a = await _setup(
+        session, client, org_slug="acme", project_slug="a"
+    )
+    headers_a = {"Authorization": client.headers["Authorization"]}
+
+    project_b, _c, _v5, _v6 = await _setup(session, client, org_slug="beta", project_slug="b")
+
+    client.headers.update(headers_a)
     trajectory_id = await _completed_trajectory_via_api(
         client, project_a.id, component_a.id, v5_a.id
     )
@@ -170,6 +225,7 @@ async def test_cross_project_isolation(client, session):
             "baseline_component_version_id": str(v5_a.id),
             "candidate_component_version_id": str(v6_a.id),
         },
+        headers=headers_a,
     )
     replay_id = create.json()["id"]
     response = await client.get(f"/api/v1/projects/{project_b.id}/replays/{replay_id}")
@@ -177,7 +233,7 @@ async def test_cross_project_isolation(client, session):
 
 
 async def test_create_replay_missing_trajectory_returns_404(client, session):
-    project, _component, v5, v6 = await _setup(session)
+    project, _component, v5, v6 = await _setup(session, client)
     response = await client.post(
         f"/api/v1/projects/{project.id}/replays",
         json={
@@ -199,7 +255,7 @@ async def test_create_replay_missing_trajectory_returns_404(client, session):
 
 
 async def test_create_replay_reports_zero_step_count(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
 
     response = await client.post(
@@ -215,7 +271,7 @@ async def test_create_replay_reports_zero_step_count(client, session):
 
 
 async def test_get_replay_reports_zero_step_count(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
     create = await client.post(
         f"/api/v1/projects/{project.id}/replays",
@@ -233,7 +289,7 @@ async def test_get_replay_reports_zero_step_count(client, session):
 
 
 async def test_list_replays_reports_zero_step_count_per_item(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
     create = await client.post(
         f"/api/v1/projects/{project.id}/replays",
@@ -252,7 +308,7 @@ async def test_list_replays_reports_zero_step_count_per_item(client, session):
 
 
 async def test_execute_replay_step_count_matches_listed_steps(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     trajectory_id = await _completed_trajectory_via_api(client, project.id, component.id, v5.id)
     create = await client.post(
         f"/api/v1/projects/{project.id}/replays",
@@ -278,7 +334,7 @@ async def test_execute_replay_step_count_matches_listed_steps(client, session):
 
 
 async def test_create_replay_incomplete_trajectory_returns_422(client, session):
-    project, component, v5, v6 = await _setup(session)
+    project, component, v5, v6 = await _setup(session, client)
     start = await client.post(f"/api/v1/projects/{project.id}/trajectories", json={})
     trajectory_id = start.json()["id"]  # never completed
 

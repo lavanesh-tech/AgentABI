@@ -56,10 +56,14 @@ def extract_trace_context(headers: KafkaHeaders | None) -> Context | None:
 
     if not _otel_available():
         return None
+    if not headers:
+        return None
+
     from opentelemetry.propagate import extract
+    from opentelemetry.trace import get_current_span
 
     carrier: dict[str, str] = {}
-    for key, value in headers or []:
+    for key, value in headers:
         try:
             carrier[key] = value.decode("utf-8")
         except UnicodeDecodeError:
@@ -67,7 +71,12 @@ def extract_trace_context(headers: KafkaHeaders | None) -> Context | None:
             # missing/invalid traceparent just means `extract()` starts
             # a fresh trace instead of continuing one.
             continue
-    return extract(carrier)
+    if not carrier:
+        return None
+
+    context = extract(carrier)
+    span_context = get_current_span(context).get_span_context()
+    return context if span_context.is_valid else None
 
 
 __all__ = ["inject_trace_headers", "extract_trace_context", "KafkaHeaders"]

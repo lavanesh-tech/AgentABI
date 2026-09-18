@@ -359,6 +359,11 @@ class GitHubPullRequestAnalysisService:
             scan = await self._session.get(CompatibilityScan, analysis.compatibility_scan_id)
             assessment = await self._session.get(RiskAssessmentRecord, analysis.risk_assessment_id)
             if scan is not None and assessment is not None:
+                # The publish-only retry path reuses persisted deterministic
+                # evidence. Explicitly load rule_results while still inside
+                # the AsyncSession context so _publish_result never triggers
+                # implicit async lazy loading / MissingGreenlet.
+                await self._session.refresh(assessment, attribute_names=["rule_results"])
                 await self._publish_result(mapping, analysis, scan, assessment)
                 return analysis
 
@@ -520,7 +525,7 @@ class GitHubPullRequestAnalysisService:
                 },
             )
             await self._session.commit()
-            raise
+            return
 
         analysis.check_run_id = result.id
         analysis.status = GitHubPRAnalysisStatus.COMPLETED.value

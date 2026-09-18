@@ -69,16 +69,56 @@ async def test_resource_not_found_returns_standard_envelope(client, session):
     assert error["code"] == "RESOURCE_NOT_FOUND"
 
 
-async def test_validation_error_returns_standard_envelope_with_fields(client):
-    # Malformed UUID path param triggers FastAPI/Pydantic validation,
-    # not a domain exception.
-    response = await client.get("/api/v1/projects/not-a-uuid/compatibility/scans")
+async def test_validation_error_returns_standard_envelope_with_fields(client, session):
+    from app.models import Organization, OrganizationMember, OrganizationRole, User
+
+    settings = get_settings()
+
+    user = User(
+        email=f"validation-{uuid.uuid4().hex[:8]}@example.com",
+        full_name="Validation User",
+        is_active=True,
+    )
+    session.add(user)
+    await session.flush()
+
+    org = Organization(
+        name="Validation Org",
+        slug=f"validation-{uuid.uuid4().hex[:8]}",
+    )
+    session.add(org)
+    await session.flush()
+
+    session.add(
+        OrganizationMember(
+            organization_id=org.id,
+            user_id=user.id,
+            role=OrganizationRole.ADMIN,
+        )
+    )
+    await session.commit()
+
+    token = encode_token(
+        subject=str(user.id),
+        secret=settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
+        issuer=settings.jwt_issuer,
+        audience=settings.jwt_audience,
+        expires_in_seconds=3600,
+        organization_id=str(org.id),
+    )
+
+    response = await client.get(
+        "/api/v1/projects/not-a-uuid/compatibility/scans",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
     assert response.status_code == 422
     error = _envelope(response)
     assert error["code"] == "VALIDATION_ERROR"
+
     body = response.json()
     assert "fields" in body["error"]
-    # Never echo the raw submitted value back under an `input` key.
     assert "input" not in str(body["error"]["fields"])
 
 

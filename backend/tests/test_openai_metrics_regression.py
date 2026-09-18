@@ -32,9 +32,13 @@ def test_explain_impl_untouched_by_metrics_wiring():
         "LLMProviderTimeout",
         "LLMProviderUnavailable",
         "LLMExplanationFailed",
-        "LLMInvalidResponse",
     ):
         assert exc_name in source
+
+    # Invalid/malformed responses are mapped by the dedicated parser /
+    # reference-validation helpers called by _explain_impl.
+    assert "_parse_response" in source
+    assert "_validate_references" in source
 
 
 def test_metrics_never_swallow_a_provider_exception():

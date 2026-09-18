@@ -8,7 +8,7 @@ translated to HTTP responses centrally in `app/api/v1/errors.py`.
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -253,7 +253,7 @@ async def get_scan_changes(
     "explanation is generated only from this scan's already-computed, "
     "deterministic changes — the LLM never recalculates compatibility, "
     "and its response cannot contain a risk score or a pass/warn/block "
-    "decision; those remain deterministic. Returns 503 if OPENAI_API_KEY "
+    "decision; those remain deterministic. Returns 503 if the OpenAI provider "
     "is not configured, 502/504 for upstream provider failures.",
 )
 async def explain_scan(
@@ -267,7 +267,7 @@ async def explain_scan(
         subject=f"compatibility scan {scan_id} of component {scan.component_id}",
         baseline_label=str(scan.baseline_version_id),
         candidate_label=str(scan.candidate_version_id),
-        changes=list(scan.changes),
+        changes=cast(Any, list(scan.changes)),
     )
     return ExplanationResponseModel(
         summary=result.summary,

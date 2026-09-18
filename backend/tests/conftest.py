@@ -130,8 +130,6 @@ async def db_engine(monkeypatch):
     tests, by design.
     """
 
-    from sqlalchemy import text
-
     from app.core.database import dispose_engine, get_engine
     from app.models import Base
 
@@ -142,7 +140,8 @@ async def db_engine(monkeypatch):
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.execute(text(_IMMUTABILITY_DDL))
+        raw_conn = await conn.get_raw_connection()
+        await raw_conn.driver_connection.execute(_IMMUTABILITY_DDL)
 
     yield engine
 
@@ -161,3 +160,30 @@ async def session(db_engine):
 
     async with get_session_factory()() as db_session:
         yield db_session
+
+
+@pytest.fixture(autouse=True)
+async def clean_async_singletons_between_tests():
+    """Keep process-wide async resources isolated across pytest event loops."""
+    from app.core.database import dispose_engine
+    from app.core.redis import dispose_redis_client, get_redis_client
+    from app.graph.client import dispose_driver
+
+    await dispose_engine()
+    await dispose_driver()
+    await dispose_redis_client()
+
+    settings = get_settings()
+    redis = get_redis_client(settings)
+    await redis.flushdb()
+
+    try:
+        yield
+    finally:
+        try:
+            await redis.flushdb()
+        finally:
+            await dispose_redis_client()
+            await dispose_driver()
+            await dispose_engine()
+        get_settings.cache_clear()

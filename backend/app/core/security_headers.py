@@ -34,7 +34,7 @@ from app.core.config import Settings
 # `disallow_subclassing_any` flags subclassing it here. There is no
 # cleaner typed boundary: this is Starlette's own, real, prescribed
 # middleware base class.
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp, settings: Settings) -> None:
         super().__init__(app)
         self._settings = settings

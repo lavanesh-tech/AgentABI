@@ -58,8 +58,8 @@ variable "enable_auth_token" {
     true only if you also provide auth_token_secret_arn pointing at a
     Secrets Manager secret you populated out-of-band.
   EOT
-  type    = bool
-  default = false
+  type        = bool
+  default     = false
 }
 
 variable "auth_token_secret_arn" {

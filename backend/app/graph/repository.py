@@ -223,7 +223,7 @@ class Neo4jGraphRepository:
             "neo4j.query", kind="client", attributes={"agentabi.neo4j_operation": operation}
         ):
             try:
-                result = await self._driver.execute_query(query, **params)
+                result = await self._driver.execute_query(query, parameters_=params)
             except (ServiceUnavailable, Neo4jError) as exc:
                 raise GraphUnavailable(str(exc)) from exc
             return [record.data() for record in result.records]

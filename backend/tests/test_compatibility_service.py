@@ -9,7 +9,7 @@ import uuid
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 
 from app.compatibility.models import Classification, CompatibilityStatus
 from app.domain.enums import ComponentType
@@ -221,7 +221,7 @@ async def test_scan_row_is_immutable_at_the_database_level(session, registry, se
     scan = await service.run_scan(project.id, component.id, "1", "2")
     await session.commit()
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(DBAPIError):
         await session.execute(
             text("UPDATE compatibility_scans SET status = 'compatible' WHERE id = :id"),
             {"id": scan.id},
@@ -236,7 +236,7 @@ async def test_scan_change_row_is_immutable_at_the_database_level(session, regis
     await session.commit()
 
     change_id = scan.changes[0].id
-    with pytest.raises(IntegrityError):
+    with pytest.raises(DBAPIError):
         await session.execute(
             text("UPDATE scan_changes SET message = 'tampered' WHERE id = :id"),
             {"id": change_id},

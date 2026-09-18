@@ -13,6 +13,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from app.domain.exceptions import (
@@ -156,7 +157,13 @@ async def test_authentication_error_is_sanitized(monkeypatch):
 
     mock_create = AsyncMock(
         side_effect=openai.AuthenticationError(
-            message="bad key", response=SimpleNamespace(status_code=401, headers={}), body=None
+            message="bad key",
+            response=httpx.Response(
+                401,
+                headers={},
+                request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+            ),
+            body=None,
         )
     )
     mock_client = SimpleNamespace(responses=SimpleNamespace(create=mock_create))
