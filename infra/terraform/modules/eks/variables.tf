@@ -23,15 +23,15 @@ variable "public_subnet_ids" {
 }
 
 variable "cluster_endpoint_public_access" {
-  description = "Expose the Kubernetes API endpoint publicly. Needed for a portfolio/demo environment operated from a laptop without VPN/bastion access; restrict with cluster_endpoint_public_access_cidrs rather than disabling entirely if possible."
+  description = "Whether to expose the Kubernetes API endpoint publicly. Secure default is private-only; explicitly opt in only when required."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "cluster_endpoint_public_access_cidrs" {
-  description = "CIDRs allowed to reach the public Kubernetes API endpoint when cluster_endpoint_public_access is true. Defaults to open (0.0.0.0/0) for demo convenience — tighten to your own IP/CIDR for anything beyond a short-lived demo."
+  description = "CIDRs allowed to reach the public Kubernetes API endpoint when explicitly enabled."
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = []
 }
 
 variable "enabled_cluster_log_types" {
