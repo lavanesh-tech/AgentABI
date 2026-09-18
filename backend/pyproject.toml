@@ -3,7 +3,7 @@ name = "agentabi"
 version = "0.1.0"
 description = "AgentABI — Agent Compatibility & Upgrade Intelligence Platform"
 requires-python = ">=3.12"
-readme = "../README.md"
+readme = { text = "AgentABI backend service.", content-type = "text/markdown" }
 license = { text = "MIT" }
 
 dependencies = [
