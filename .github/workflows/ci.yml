@@ -93,27 +93,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          # No package-lock.json exists in this repository yet (see the
-          # note below), so `cache: npm` here has no lockfile to key on
-          # and is intentionally omitted rather than pointed at a file
-          # that doesn't exist.
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      # frontend/ has never had a committed package-lock.json (predates
-      # Phase 18; the Makefile's own `frontend` target already used
-      # `npm install`, not `npm ci`) and Phase 18 could not generate one:
-      # this sandbox's registry access reproducibly 403s on
-      # `@playwright/test` specifically (confirmed non-transient — see
-      # docs/ROADMAP.md's Phase 18 section) while every other package in
-      # package.json resolves fine. Rather than commit a partial/invalid
-      # lockfile (which would just fail `npm ci` for a different,
-      # confusing reason on a real runner), this job uses `npm install`,
-      # matching the repository's existing convention. Once
-      # package-lock.json is generated from a machine with full registry
-      # access and committed, switch this step to `npm ci` and restore
-      # `cache: npm` above for reproducible, faster installs.
       - name: Install dependencies
         working-directory: frontend
-        run: npm install
+        run: npm ci
 
       - name: ESLint
         working-directory: frontend
