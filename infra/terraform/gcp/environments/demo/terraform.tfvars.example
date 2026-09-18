@@ -1,0 +1,3 @@
+project_id  = "agentabi-demo-2026"
+region      = "us-east1"
+environment = "demo"
