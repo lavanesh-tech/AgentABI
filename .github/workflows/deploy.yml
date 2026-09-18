@@ -160,13 +160,26 @@ jobs:
           unset GITHUB_OAUTH_CLIENT_ID
           unset GITHUB_OAUTH_CLIENT_SECRET
 
+      - name: Resolve Cloud SQL private IP
+        run: |
+          POSTGRES_HOST="$(gcloud sql instances describe agentabi-demo-postgres \
+            --project "$PROJECT_ID" \
+            --format='value(ipAddresses[0].ipAddress)')"
+
+          if [ -z "$POSTGRES_HOST" ]; then
+            echo "Cloud SQL private IP could not be resolved."
+            exit 1
+          fi
+
+          echo "POSTGRES_HOST=$POSTGRES_HOST" >> "$GITHUB_ENV"
+
       - name: Helm lint
         run: |
           helm lint deploy/helm/agentabi \
             --values deploy/helm/agentabi/values-gcp.yaml \
             --set image.registry="$REGISTRY" \
             --set image.tag="$IMAGE_TAG" \
-            --set ingress.enabled=false
+            --set gcp.postgresHost="$POSTGRES_HOST" \
 
       - name: Deploy
         run: |
@@ -176,7 +189,7 @@ jobs:
             --values deploy/helm/agentabi/values-gcp.yaml \
             --set image.registry="$REGISTRY" \
             --set image.tag="$IMAGE_TAG" \
-            --set ingress.enabled=false \
+            --set gcp.postgresHost="$POSTGRES_HOST" \
             --wait \
             --timeout 15m
 
