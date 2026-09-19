@@ -145,9 +145,9 @@ async def test_rate_limiting_still_applies(client, session, monkeypatch):
 
     # Route dependencies are created when the FastAPI router is imported,
     # so exercise the route's real configured startup limit.
-    from app.core.config import get_settings
+    from app.api.v1.github_webhook import _settings
 
-    limit = get_settings().rate_limit_mutation_requests
+    limit = _settings.rate_limit_mutation_requests
 
     statuses = []
     for i in range(limit + 2):
