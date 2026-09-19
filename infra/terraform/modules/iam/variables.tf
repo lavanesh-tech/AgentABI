@@ -52,3 +52,9 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "kms_decrypt_key_arns" {
+  description = "KMS key ARNs the AgentABI workload role may use for decrypt operations."
+  type        = list(string)
+  default     = []
+}

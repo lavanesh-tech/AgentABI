@@ -1,0 +1,31 @@
+namespace: agentabi
+
+serviceAccount:
+  create: true
+  name: agentabi
+  roleArn: "arn:aws:iam::719429929317:role/agentabi-dev-irsa-app-workload"
+
+aws:
+  rdsEndpoint: "agentabi-dev-postgres.cmhe0maekcql.us-east-1.rds.amazonaws.com"
+  redisEndpoint: "master.agentabi-dev-cache.r0yy9u.use1.cache.amazonaws.com"
+
+  secrets:
+    jwtSigningKey: "arn:aws:secretsmanager:us-east-1:719429929317:secret:agentabi-dev/jwt-signing-key-rvkT5n"
+    openaiApiKey: "arn:aws:secretsmanager:us-east-1:719429929317:secret:agentabi-dev/openai-api-key-6dWdTJ"
+    githubOauthClient: "arn:aws:secretsmanager:us-east-1:719429929317:secret:agentabi-dev/github-oauth-client-YhjRCK"
+    githubAppCredentials: "arn:aws:secretsmanager:us-east-1:719429929317:secret:agentabi-dev/github-app-credentials-LYsXBC"
+    rdsMasterUserSecret: "arn:aws:secretsmanager:us-east-1:719429929317:secret:rds!db-319c0855-3404-4262-82b8-149c8c8451a8-qymHQh"
+
+neo4j:
+  storageClassName: gp3
+  storageSize: 10Gi
+
+kafka:
+  storageClassName: gp3
+  storageSize: 5Gi
+
+ingress:
+  enabled: false
+  className: alb
+  host: ""
+  certificateArn: ""

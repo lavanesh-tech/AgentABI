@@ -35,13 +35,7 @@ output "redis_primary_endpoint" {
   value = module.redis.primary_endpoint
 }
 
-output "msk_deployment_mode" {
-  value = module.msk.deployment_mode
-}
 
-output "msk_bootstrap_brokers_iam" {
-  value = module.msk.bootstrap_brokers_iam
-}
 
 output "secrets_manager_secret_arns" {
   description = "Empty secret containers awaiting out-of-band value population — see infra/terraform/README.md."

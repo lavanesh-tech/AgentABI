@@ -24,7 +24,7 @@ spec:
           # vars.NEXT_PUBLIC_AGENTABI_API_URL as a build-arg to
           # docker/build-push-action, so this chart never tries to
           # override it at deploy time (that would silently do nothing).
-          image: {{ include "agentabi.image" (dict "registry" .Values.image.registry "repository" "agentabi-frontend" "tag" .Values.image.tag) }}
+          image: {{ include "agentabi.image" (dict "registry" .Values.image.registry "repository" "agentabi-frontend" "tag" .Values.image.tag) | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: 3000

@@ -19,7 +19,7 @@ spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
       containers:
         - name: api
-          image: {{ include "agentabi.image" (dict "registry" .Values.image.registry "repository" "agentabi-api" "tag" .Values.image.tag) }}
+          image: {{ include "agentabi.image" (dict "registry" .Values.image.registry "repository" "agentabi-api" "tag" .Values.image.tag) | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # The image's own CMD runs uvicorn directly with no DB
           # credentials baked in; POSTGRES_DSN is only fully known at
@@ -55,6 +55,17 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources.api | nindent 12 }}
+          volumeMounts:
+            - name: csi-secrets
+              mountPath: /mnt/secrets-store
+              readOnly: true
+      volumes:
+        - name: csi-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: agentabi-secrets
 ---
 apiVersion: v1
 kind: Service

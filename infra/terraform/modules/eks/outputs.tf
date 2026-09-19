@@ -27,6 +27,11 @@ output "additional_security_group_id" {
   value       = aws_security_group.cluster_additional.id
 }
 
+output "cluster_security_group_id" {
+  description = "EKS-created cluster security group automatically associated with managed node group ENIs."
+  value       = aws_eks_cluster.this.vpc_config[0].cluster_security_group_id
+}
+
 output "oidc_provider_arn" {
   value = aws_iam_openid_connect_provider.eks.arn
 }

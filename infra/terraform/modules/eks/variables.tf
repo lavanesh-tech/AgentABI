@@ -47,7 +47,7 @@ variable "cluster_log_retention_days" {
 
 variable "node_instance_types" {
   type    = list(string)
-  default = ["t3.medium"]
+  default = ["c7i-flex.large"]
 }
 
 variable "node_capacity_type" {

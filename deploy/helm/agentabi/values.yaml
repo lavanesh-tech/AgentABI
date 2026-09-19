@@ -54,13 +54,12 @@ neo4j:
   image: neo4j:5-community
   plugins: '["apoc"]'
 
-# --- AWS-managed data services (RDS / ElastiCache / MSK) -------------------
+# --- AWS-managed data services (RDS / ElastiCache) -------------------------
 # Hostnames/endpoints only — never credentials. Populated from
 # `terraform output` in environments/dev after Phase 19's apply.
 aws:
   rdsEndpoint: ""
   redisEndpoint: ""
-  mskBootstrapBrokers: ""
   # Secrets Manager secret ARNs/names this chart's SecretProviderClass
   # mounts (see templates/secretproviderclass.yaml). Populated from
   # `terraform output secrets_manager_secret_arns` and
@@ -71,6 +70,18 @@ aws:
     githubOauthClient: ""
     githubAppCredentials: ""
     rdsMasterUserSecret: ""
+
+kafka:
+  image: apache/kafka:4.1.2
+  storageSize: 5Gi
+  storageClassName: gp3
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
 
 observability:
   otelEnabled: false

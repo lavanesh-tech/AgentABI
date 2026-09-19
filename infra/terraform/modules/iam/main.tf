@@ -249,6 +249,32 @@ resource "aws_iam_role_policy_attachment" "app_secrets_read" {
   policy_arn = aws_iam_policy.app_secrets_read[0].arn
 }
 
+
+# --- AgentABI KMS decrypt --------------------------------------------------
+
+data "aws_iam_policy_document" "app_kms_decrypt" {
+  count = length(var.kms_decrypt_key_arns) > 0 ? 1 : 0
+
+  statement {
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = var.kms_decrypt_key_arns
+  }
+}
+
+resource "aws_iam_policy" "app_kms_decrypt" {
+  count  = length(var.kms_decrypt_key_arns) > 0 ? 1 : 0
+  name   = "${var.name_prefix}-app-kms-decrypt"
+  policy = data.aws_iam_policy_document.app_kms_decrypt[0].json
+  tags   = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "app_kms_decrypt" {
+  count      = length(var.kms_decrypt_key_arns) > 0 ? 1 : 0
+  role       = aws_iam_role.app_workload.name
+  policy_arn = aws_iam_policy.app_kms_decrypt[0].arn
+}
+
 # --- external-dns (optional, only meaningful with the dns module) ---------
 
 data "aws_iam_policy_document" "external_dns_trust" {
