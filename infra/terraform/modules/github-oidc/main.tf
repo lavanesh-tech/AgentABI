@@ -15,14 +15,20 @@ locals {
   # project), import it instead of letting this collide.
   github_oidc_issuer_url = "https://token.actions.githubusercontent.com"
 
-  ref_subjects = [
-    for ref in var.allowed_ref_patterns :
-    "repo:${var.github_org}/${var.github_repository}:ref:${ref}"
-  ]
-  environment_subjects = [
-    for env in var.allowed_environments :
-    "repo:${var.github_org}/${var.github_repository}:environment:${env}"
-  ]
+  ref_subjects = flatten([
+    for ref in var.allowed_ref_patterns : [
+      "repo:${var.github_org}/${var.github_repository}:ref:${ref}",
+      "repo:${var.github_org}@269763115/${var.github_repository}@1375261661:ref:${ref}"
+    ]
+  ])
+
+  environment_subjects = flatten([
+    for env in var.allowed_environments : [
+      "repo:${var.github_org}/${var.github_repository}:environment:${env}",
+      "repo:${var.github_org}@269763115/${var.github_repository}@1375261661:environment:${env}"
+    ]
+  ])
+
   allowed_subjects = concat(local.ref_subjects, local.environment_subjects)
 }
 
