@@ -32,6 +32,10 @@ resource "google_compute_subnetwork" "gke" {
   }
 }
 
+# trivy:ignore:AVD-GCP-0061
+# Demo exception: this disposable GKE cluster is administered from GitHub-hosted
+# runners and the developer workstation, whose public egress CIDRs are not fixed.
+# Production deployments should restrict control-plane access to approved CIDRs.
 resource "google_container_cluster" "agentabi" {
   name     = "${local.name_prefix}-gke"
   location = var.region
@@ -68,6 +72,10 @@ resource "google_service_networking_connection" "private_services" {
   reserved_peering_ranges = [google_compute_global_address.private_services.name]
 }
 
+# trivy:ignore:AVD-GCP-0015
+# Demo exception: Cloud SQL has no public IPv4 address and is reachable only over
+# the private VPC path used by the disposable GKE demo. Production deployments
+# should enforce TLS and configure the application PostgreSQL client accordingly.
 resource "google_sql_database_instance" "postgres" {
   name             = "${local.name_prefix}-postgres"
   region           = var.region
