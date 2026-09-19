@@ -2,39 +2,35 @@
 
 **Agent Compatibility & Upgrade Intelligence Platform**
 
-AgentABI is a production-style platform for determining whether a change to an AI-agent system is safe to deploy.
+AgentABI is a production-style platform for evaluating whether changes to AI-agent systems are safe to deploy.
 
-It analyzes changes to models, prompts, tools, MCP servers, schemas, APIs, policies, providers, and workflows before they reach production.
+It analyzes changes to models, prompts, tools, schemas, APIs, and workflows using deterministic compatibility checks, dependency analysis, historical trajectory replay, differential analysis, and deployment risk evaluation.
 
-The core principle is simple:
-
-> **Deterministic software makes the compatibility decision. The LLM only explains the evidence.**
-
-AgentABI does not send raw logs to an LLM and ask it to guess whether a deployment is safe. Compatibility analysis, dependency traversal, replay comparison, risk scoring, and the final `PASS`, `WARN`, or `BLOCK` decision are performed by deterministic application logic.
+The system is intentionally designed so that **LLMs explain evidence but never decide compatibility or deployment safety**.
 
 ---
 
 ## Why AgentABI
 
-Modern agent systems can fail when seemingly small changes alter:
+Modern AI-agent systems depend on more than model output. They also depend on:
 
-- tool input/output schemas
-- prompts or model behavior
-- APIs and provider contracts
-- MCP tools or servers
-- workflow dependencies
-- authorization policies
-- downstream assumptions
+- tool schemas
+- API contracts
+- prompt formats
+- workflow assumptions
+- shared state
+- service dependencies
+- historical execution behavior
 
-Traditional unit tests often do not capture the full impact of those changes.
+A small change to one component can break another component several steps away.
 
-AgentABI combines structural compatibility analysis with dependency graphs and historical execution replay to answer:
+AgentABI is built to answer:
 
-**What changed, what can it affect, how did behavior change, and is the deployment safe?**
+> **Can this change be deployed safely, and what evidence supports that decision?**
 
 ---
 
-## Core Pipeline
+## Core Workflow
 
 ```text
 GitHub Pull Request
@@ -43,19 +39,19 @@ GitHub Pull Request
 Change Detection
         |
         v
-Baseline vs Candidate Configuration
+Baseline + Candidate Configuration
         |
         v
-Deterministic Schema / Configuration Diff
+Deterministic Schema / Config Diff
         |
         v
-Neo4j Dependency Graph + Blast Radius
+Dependency Graph + Blast Radius
         |
         v
 Historical Trajectory Selection
         |
         v
-Baseline Replay / Candidate Replay
+Baseline Replay + Candidate Replay
         |
         v
 Differential Analysis
@@ -63,69 +59,105 @@ Differential Analysis
         v
 Deterministic Risk Engine
         |
-        +------> PASS / WARN / BLOCK
-        |
         v
 LLM Evidence Explanation
         |
         v
-GitHub / UI Result
+PASS / WARN / BLOCK
 ```
+
+The final deployment decision is produced by deterministic software.
+
+The LLM is used only after the system has already produced structured evidence.
 
 ---
 
 ## Architecture
 
 ```mermaid
-flowchart TD
-    GH[GitHub Pull Request / Webhook] --> API[FastAPI API]
-
-    API --> DIFF[Compatibility & Schema Diff Engine]
-    API --> GRAPH[Dependency Graph Service]
-    API --> REPLAY[Replay Engine]
-
-    DIFF --> RISK[Deterministic Risk Engine]
-    GRAPH --> RISK
-    REPLAY --> DIFFERENTIAL[Differential Analyzer]
-    DIFFERENTIAL --> RISK
-
-    RISK --> DECISION[PASS / WARN / BLOCK]
+flowchart LR
+    PR[GitHub Pull Request] --> API[FastAPI API]
+    API --> DIFF[Compatibility Engine]
+    DIFF --> GRAPH[Neo4j Dependency Graph]
+    GRAPH --> REPLAY[Replay Engine]
+    REPLAY --> ANALYSIS[Differential Analyzer]
+    ANALYSIS --> RISK[Deterministic Risk Engine]
     RISK --> LLM[OpenAI Explanation Layer]
+    LLM --> RESULT[PASS / WARN / BLOCK]
 
     API --> PG[(PostgreSQL)]
-    GRAPH --> NEO[(Neo4j)]
     API --> REDIS[(Redis)]
     API --> KAFKA[(Kafka)]
-
-    UI[Next.js Frontend] --> API
+    GRAPH --> NEO4J[(Neo4j)]
+    KAFKA --> WORKER[Background Worker]
+    WORKER --> PG
 ```
 
 ---
 
 ## Major Capabilities
 
-- Component registry for agent-system dependencies
-- Deterministic schema normalization and compatibility diffing
-- Neo4j dependency graph and blast-radius analysis
-- Historical trajectory storage
-- Deterministic replay engine
-- Baseline-versus-candidate differential analysis
-- Deterministic risk scoring and `PASS/WARN/BLOCK` decisions
-- OpenAI explanation layer over already-computed evidence
-- GitHub OAuth2 authentication
-- Organization/project RBAC with `OWNER`, `ADMIN`, and `MEMBER` roles
-- Multi-tenant authorization boundaries
-- GitHub webhook signature verification
-- Redis-backed rate limiting
-- Structured audit logging
-- Correlation IDs and security headers
-- OpenTelemetry tracing support
-- Prometheus metrics and Grafana dashboards
-- React Flow dependency visualization
-- Production Docker images
-- Helm Kubernetes deployment
-- Terraform infrastructure
-- GitHub Actions CI/CD and security scanning
+### Compatibility Analysis
+
+AgentABI normalizes and compares baseline and candidate configurations to identify:
+
+- breaking schema changes
+- field additions and removals
+- type changes
+- required-field changes
+- interface incompatibilities
+- tool and API contract drift
+
+This logic is deterministic and does not depend on an LLM.
+
+### Dependency Graph and Blast Radius
+
+Neo4j stores relationships between components and allows AgentABI to determine which downstream systems may be affected by a change.
+
+The platform can trace dependencies across:
+
+- agents
+- tools
+- prompts
+- services
+- APIs
+- models
+- workflows
+
+### Historical Trajectory Replay
+
+AgentABI records execution trajectories and replays them against both baseline and candidate configurations.
+
+This allows the platform to compare actual behavioral outcomes rather than relying only on static configuration checks.
+
+### Differential Analysis
+
+Replay outputs are compared to identify meaningful behavioral changes such as:
+
+- changed tool calls
+- changed outputs
+- failed transitions
+- changed execution paths
+- state differences
+- unexpected behavior
+
+### Deterministic Risk Engine
+
+Structured evidence from compatibility analysis, graph impact, and replay differences is evaluated by a deterministic risk engine.
+
+The system produces one of three outcomes:
+
+- `PASS`
+- `WARN`
+- `BLOCK`
+
+The LLM does not assign the risk score or final decision.
+
+### Evidence Explanation
+
+OpenAI is used only to explain already-computed evidence in clear language.
+
+This keeps the platform auditable and avoids using an LLM as the source of truth for deployment safety.
 
 ---
 
@@ -133,245 +165,202 @@ flowchart TD
 
 ### Backend
 
-- Python 3.12
+- Python 3.12+
 - FastAPI
 - Pydantic
 - SQLAlchemy
 - Alembic
-- asyncio / httpx
-- OpenAI API
+- asyncio
+- httpx
 
 ### Data and Messaging
 
 - PostgreSQL
-- Neo4j
 - Redis
-- Kafka
+- Neo4j
+- Apache Kafka
+
+### AI
+
+- OpenAI API
+- provider abstraction
+- deterministic evidence pipeline before LLM explanation
 
 ### Frontend
 
 - Next.js
 - React
 - TypeScript
+- Tailwind CSS
 - TanStack Query
 - React Flow
 - Recharts
-- Tailwind CSS
 
-### Cloud and Platform
+### Cloud and DevOps
 
+- Google Cloud Platform
 - Google Kubernetes Engine Autopilot
-- Google Cloud SQL
-- Google Artifact Registry
-- Google Secret Manager
-- Google Cloud VPC
+- Cloud SQL for PostgreSQL
+- Artifact Registry
+- Secret Manager
 - Terraform
 - Helm
 - Docker
 - GitHub Actions
 - Workload Identity Federation
 
-The repository also contains the earlier AWS infrastructure design using EKS, RDS, ElastiCache, MSK, ECR, IAM, and related Terraform modules.
+### Observability
+
+- OpenTelemetry
+- Prometheus
+- Grafana
+- structured logging
+- health and readiness endpoints
 
 ---
 
-## On-Demand Recruiter Demo
+## GCP Recruiter Demo
 
-The GCP environment is intentionally designed to be started only when a live demo is required instead of remaining online continuously.
+AgentABI includes an on-demand GCP deployment designed for demonstrations without keeping infrastructure running continuously.
 
-### Start the demo
+The demo environment includes:
+
+- GKE Autopilot
+- Cloud SQL PostgreSQL
+- Redis
+- Kafka
+- Neo4j
+- API
+- background worker
+- Next.js frontend
+- Secret Manager-backed runtime configuration
+
+### Start the Demo
 
 ```bash
-cd /Users/lavaneshthirukondamahendran/Desktop/AgentABI
 ./scripts/gcp-demo-up.sh
 ```
 
-The startup workflow:
+The script:
 
 1. starts Cloud SQL
-2. reconciles Terraform-managed infrastructure
-3. recreates the GKE Autopilot cluster when necessary
-4. restores runtime secrets from Secret Manager
-5. deploys AgentABI with Helm
-6. waits for the application workloads
-7. waits for the external load balancer
-8. verifies the public readiness endpoint
+2. provisions the GKE environment
+3. restores runtime secrets
+4. deploys the Helm release
+5. waits for workloads to become ready
+6. verifies the public readiness endpoint
 
-A cold start can take several minutes because GKE and the external load balancer may need to be recreated.
-
-### Check demo status
+### Check Status
 
 ```bash
 ./scripts/gcp-demo-status.sh
 ```
 
-### Stop the demo
+### Shut Down the Demo
 
 ```bash
 ./scripts/gcp-demo-down.sh --yes
 ```
 
-The shutdown workflow removes the public ingress, deletes the GKE demo cluster, and stops Cloud SQL while preserving database storage.
-
-This lets the demo stay offline when it is not needed.
+The environment is intentionally disposable so it can be shut down when not needed.
 
 ---
 
 ## CI/CD
 
-The repository contains:
+GitHub Actions validates the repository before merge.
 
-```text
-.github/workflows/ci.yml
-.github/workflows/deploy.yml
-```
+The pipeline includes:
 
-CI validates the backend, frontend, Terraform, container builds, and security checks.
+- backend linting
+- formatting validation
+- static type checking
+- automated tests
+- frontend linting
+- TypeScript validation
+- frontend unit tests
+- production build verification
+- Docker production image builds
+- Terraform formatting and validation
+- secret scanning
+- dependency vulnerability scanning
+- infrastructure misconfiguration scanning
 
-The GCP deployment workflow uses:
-
-```text
-GitHub Actions
-      |
-      v
-OIDC / Workload Identity Federation
-      |
-      v
-Google Cloud
-      |
-      +--> Artifact Registry
-      |
-      +--> GKE
-      |
-      +--> Secret Manager
-      |
-      +--> Cloud SQL
-```
-
-No long-lived Google Cloud service-account JSON key is required by the deployment pipeline.
+GCP deployment uses **Workload Identity Federation** instead of long-lived Google Cloud service-account keys.
 
 ---
 
-## Security Model
+## Security
 
-AgentABI includes:
+AgentABI includes multiple security controls:
 
-- GitHub OAuth2 login
-- Signed AgentABI JWTs
-- Organization/project RBAC
-- Tenant-scoped authorization
-- Webhook HMAC-SHA256 verification
-- Redis rate limiting
-- Request-size controls
-- CORS and security headers
-- Correlation IDs
-- Append-only audit events
-- Secret storage outside source control
-- Automated Gitleaks scanning
-- Trivy filesystem/IaC scanning
-
-Cross-tenant resources intentionally return `404` rather than revealing that another tenant's resource exists.
-
-See [`docs/SECURITY_VERIFICATION.md`](docs/SECURITY_VERIFICATION.md).
-
----
-
-## Observability
-
-AgentABI supports:
-
-- structured JSON logging
-- OpenTelemetry distributed tracing
-- Prometheus application metrics
-- Grafana dashboards
-- API and worker instrumentation
-
-Tracing can be disabled independently of metrics.
+- JWT authentication
+- GitHub OAuth
+- organization-aware RBAC
+- OWNER / ADMIN / MEMBER permissions
+- signed webhook verification
+- rate limiting
+- request-size limits
+- CORS configuration
+- security headers
+- correlation IDs
+- audit logging
+- Secret Manager integration
+- private Cloud SQL networking
+- CI secret scanning
+- dependency vulnerability scanning
+- infrastructure security checks
 
 ---
 
 ## Local Development
 
-Create the environment:
+### Requirements
+
+- Python 3.12+
+- Node.js
+- Docker
+- Docker Compose
+
+### Start Infrastructure
 
 ```bash
-cp .env.example .env
-make install
-make infra-up
-make migrate
-make run
+docker compose up -d
 ```
 
-Backend quality checks:
+### Backend
 
 ```bash
-make fmt
-make lint
-make typecheck
-make test
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
-A Docker-based Python 3.12 test path is also available:
+Run the API:
 
 ```bash
-make infra-up
-docker compose run --rm test
+uvicorn agentabi.main:app --reload
 ```
 
----
-
-## Frontend Development
+### Frontend
 
 ```bash
-cp frontend/.env.example frontend/.env.local
 cd frontend
-npm install
+npm ci
 npm run dev
-```
-
-Validation:
-
-```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
 ```
 
 ---
 
 ## Health Endpoints
 
-Process health:
-
 ```text
 GET /api/v1/health
-```
-
-Dependency readiness:
-
-```text
 GET /api/v1/ready
 ```
 
-The readiness endpoint verifies required runtime dependencies such as PostgreSQL, Neo4j, and Kafka.
-
----
-
-## API Documentation
-
-When running locally, FastAPI Swagger documentation is available at:
-
-```text
-/docs
-```
-
-A Postman collection and usage instructions are available in:
-
-```text
-postman/
-docs/POSTMAN.md
-```
+The readiness endpoint verifies required dependencies such as the database, graph layer, and event infrastructure.
 
 ---
 
@@ -379,49 +368,77 @@ docs/POSTMAN.md
 
 ```text
 AgentABI/
-├── backend/                  FastAPI application and deterministic engines
-├── frontend/                 Next.js web application
-├── deploy/helm/agentabi/     Kubernetes Helm chart
-├── infra/terraform/          AWS infrastructure
-├── infra/terraform/gcp/      GCP recruiter-demo infrastructure
-├── docs/                     Architecture, ADRs, security and runbooks
-├── scripts/                  Operational demo scripts
-├── postman/                  API collection and environment
-├── .github/workflows/        CI/CD pipelines
-└── docker-compose.yml        Local infrastructure
+├── backend/
+│   ├── agentabi/
+│   ├── alembic/
+│   └── tests/
+├── frontend/
+├── deploy/
+│   └── helm/
+├── infra/
+│   └── terraform/
+│       ├── gcp/
+│       └── modules/
+├── observability/
+├── scripts/
+├── docs/
+├── postman/
+├── docker-compose.yml
+└── README.md
 ```
 
 ---
 
 ## Engineering Documentation
 
-Detailed design information is available in:
+The repository includes supporting technical documentation:
 
-- [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md)
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/DECISIONS.md`](docs/DECISIONS.md)
-- [`docs/ROADMAP.md`](docs/ROADMAP.md)
-- [`docs/SECURITY_VERIFICATION.md`](docs/SECURITY_VERIFICATION.md)
-- [`docs/INTERVIEW_NOTES.md`](docs/INTERVIEW_NOTES.md)
-- [`docs/POSTMAN.md`](docs/POSTMAN.md)
+- `docs/PROJECT_SPEC.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DECISIONS.md`
+- `docs/ROADMAP.md`
+- `docs/INTERVIEW_NOTES.md`
+- `docs/POSTMAN.md`
+- `docs/SECURITY_VERIFICATION.md`
 
 ---
 
-## Design Invariant
+## Design Principle
 
-AgentABI's most important architectural boundary is:
+AgentABI follows one strict rule:
 
-```text
-Deterministic analysis
-    -> produces evidence
-    -> calculates risk
-    -> decides PASS/WARN/BLOCK
+> **Deterministic software decides. LLMs explain.**
 
-LLM
-    -> receives structured evidence
-    -> explains the result
-```
+Compatibility, dependency analysis, replay results, differential analysis, risk evaluation, and the final `PASS / WARN / BLOCK` outcome are produced by deterministic application logic.
 
-The language model does **not** calculate compatibility, dependency edges, replay metrics, risk scores, or deployment decisions.
+This keeps the system reproducible, testable, and auditable.
 
-That separation keeps the safety decision reproducible, testable, and independent of the explanation model.
+---
+
+## What This Project Demonstrates
+
+AgentABI was built to demonstrate practical engineering across several areas:
+
+- backend system design
+- distributed systems
+- event-driven architecture
+- graph-based dependency analysis
+- deterministic replay
+- AI infrastructure
+- API security
+- cloud deployment
+- infrastructure as code
+- Kubernetes
+- CI/CD
+- observability
+- production-oriented testing
+
+The project is structured as an engineering platform rather than a simple chatbot or API wrapper.
+
+---
+
+## Status
+
+Core platform functionality, security hardening, CI validation, frontend integration, and the on-demand GCP deployment workflow are implemented.
+
+The cloud demo is kept offline when not in use and can be started for demonstrations using the provided lifecycle scripts.
