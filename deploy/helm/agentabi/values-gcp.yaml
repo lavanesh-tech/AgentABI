@@ -1,0 +1,83 @@
+namespace: agentabi
+
+image:
+  registry: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: agentabi
+
+replicaCount:
+  api: 1
+  worker: 1
+  frontend: 1
+
+gcp:
+  staticIpName: "agentabi-demo-ip"
+  postgresHost: ""
+  oauthRedirectUri: "http://8.233.188.40/auth/callback"
+redis:
+  image: redis:7-alpine
+
+kafka:
+  image: apache/kafka:3.8.0
+
+neo4j:
+  image: neo4j:5-community
+  plugins: '["apoc"]'
+  storageClassName: standard-rwo
+  storageSize: 5Gi
+
+resources:
+  api:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  worker:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  frontend:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+  redis:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+  kafka:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  neo4j:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 1536Mi
+
+ingress:
+  enabled: true
