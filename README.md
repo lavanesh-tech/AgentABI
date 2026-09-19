@@ -1,92 +1,427 @@
 # AgentABI
 
-Agent Compatibility & Upgrade Intelligence Platform — determines whether a
-change to an AI-agent system (model, prompt, MCP server/tool, schema, API,
-policy, or workflow) is safe to deploy, using deterministic schema diffing,
-dependency-graph blast-radius analysis, and trajectory replay. LLMs explain
-evidence; they never make the PASS/WARN/BLOCK decision.
+**Agent Compatibility & Upgrade Intelligence Platform**
 
-See `docs/PROJECT_SPEC.md` for the full spec, `docs/ARCHITECTURE.md` for the
-current implementation, `docs/DECISIONS.md` for the ADR log, and
-`docs/ROADMAP.md` for build status.
+AgentABI is a production-style platform for determining whether a change to an AI-agent system is safe to deploy.
 
-## Local development
+It analyzes changes to models, prompts, tools, MCP servers, schemas, APIs, policies, providers, and workflows before they reach production.
+
+The core principle is simple:
+
+> **Deterministic software makes the compatibility decision. The LLM only explains the evidence.**
+
+AgentABI does not send raw logs to an LLM and ask it to guess whether a deployment is safe. Compatibility analysis, dependency traversal, replay comparison, risk scoring, and the final `PASS`, `WARN`, or `BLOCK` decision are performed by deterministic application logic.
+
+---
+
+## Why AgentABI
+
+Modern agent systems can fail when seemingly small changes alter:
+
+- tool input/output schemas
+- prompts or model behavior
+- APIs and provider contracts
+- MCP tools or servers
+- workflow dependencies
+- authorization policies
+- downstream assumptions
+
+Traditional unit tests often do not capture the full impact of those changes.
+
+AgentABI combines structural compatibility analysis with dependency graphs and historical execution replay to answer:
+
+**What changed, what can it affect, how did behavior change, and is the deployment safe?**
+
+---
+
+## Core Pipeline
+
+```text
+GitHub Pull Request
+        |
+        v
+Change Detection
+        |
+        v
+Baseline vs Candidate Configuration
+        |
+        v
+Deterministic Schema / Configuration Diff
+        |
+        v
+Neo4j Dependency Graph + Blast Radius
+        |
+        v
+Historical Trajectory Selection
+        |
+        v
+Baseline Replay / Candidate Replay
+        |
+        v
+Differential Analysis
+        |
+        v
+Deterministic Risk Engine
+        |
+        +------> PASS / WARN / BLOCK
+        |
+        v
+LLM Evidence Explanation
+        |
+        v
+GitHub / UI Result
+```
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    GH[GitHub Pull Request / Webhook] --> API[FastAPI API]
+
+    API --> DIFF[Compatibility & Schema Diff Engine]
+    API --> GRAPH[Dependency Graph Service]
+    API --> REPLAY[Replay Engine]
+
+    DIFF --> RISK[Deterministic Risk Engine]
+    GRAPH --> RISK
+    REPLAY --> DIFFERENTIAL[Differential Analyzer]
+    DIFFERENTIAL --> RISK
+
+    RISK --> DECISION[PASS / WARN / BLOCK]
+    RISK --> LLM[OpenAI Explanation Layer]
+
+    API --> PG[(PostgreSQL)]
+    GRAPH --> NEO[(Neo4j)]
+    API --> REDIS[(Redis)]
+    API --> KAFKA[(Kafka)]
+
+    UI[Next.js Frontend] --> API
+```
+
+---
+
+## Major Capabilities
+
+- Component registry for agent-system dependencies
+- Deterministic schema normalization and compatibility diffing
+- Neo4j dependency graph and blast-radius analysis
+- Historical trajectory storage
+- Deterministic replay engine
+- Baseline-versus-candidate differential analysis
+- Deterministic risk scoring and `PASS/WARN/BLOCK` decisions
+- OpenAI explanation layer over already-computed evidence
+- GitHub OAuth2 authentication
+- Organization/project RBAC with `OWNER`, `ADMIN`, and `MEMBER` roles
+- Multi-tenant authorization boundaries
+- GitHub webhook signature verification
+- Redis-backed rate limiting
+- Structured audit logging
+- Correlation IDs and security headers
+- OpenTelemetry tracing support
+- Prometheus metrics and Grafana dashboards
+- React Flow dependency visualization
+- Production Docker images
+- Helm Kubernetes deployment
+- Terraform infrastructure
+- GitHub Actions CI/CD and security scanning
+
+---
+
+## Technology Stack
+
+### Backend
+
+- Python 3.12
+- FastAPI
+- Pydantic
+- SQLAlchemy
+- Alembic
+- asyncio / httpx
+- OpenAI API
+
+### Data and Messaging
+
+- PostgreSQL
+- Neo4j
+- Redis
+- Kafka
+
+### Frontend
+
+- Next.js
+- React
+- TypeScript
+- TanStack Query
+- React Flow
+- Recharts
+- Tailwind CSS
+
+### Cloud and Platform
+
+- Google Kubernetes Engine Autopilot
+- Google Cloud SQL
+- Google Artifact Registry
+- Google Secret Manager
+- Google Cloud VPC
+- Terraform
+- Helm
+- Docker
+- GitHub Actions
+- Workload Identity Federation
+
+The repository also contains the earlier AWS infrastructure design using EKS, RDS, ElastiCache, MSK, ECR, IAM, and related Terraform modules.
+
+---
+
+## On-Demand Recruiter Demo
+
+The GCP environment is intentionally designed to be started only when a live demo is required instead of remaining online continuously.
+
+### Start the demo
+
+```bash
+cd /Users/lavaneshthirukondamahendran/Desktop/AgentABI
+./scripts/gcp-demo-up.sh
+```
+
+The startup workflow:
+
+1. starts Cloud SQL
+2. reconciles Terraform-managed infrastructure
+3. recreates the GKE Autopilot cluster when necessary
+4. restores runtime secrets from Secret Manager
+5. deploys AgentABI with Helm
+6. waits for the application workloads
+7. waits for the external load balancer
+8. verifies the public readiness endpoint
+
+A cold start can take several minutes because GKE and the external load balancer may need to be recreated.
+
+### Check demo status
+
+```bash
+./scripts/gcp-demo-status.sh
+```
+
+### Stop the demo
+
+```bash
+./scripts/gcp-demo-down.sh --yes
+```
+
+The shutdown workflow removes the public ingress, deletes the GKE demo cluster, and stops Cloud SQL while preserving database storage.
+
+This lets the demo stay offline when it is not needed.
+
+---
+
+## CI/CD
+
+The repository contains:
+
+```text
+.github/workflows/ci.yml
+.github/workflows/deploy.yml
+```
+
+CI validates the backend, frontend, Terraform, container builds, and security checks.
+
+The GCP deployment workflow uses:
+
+```text
+GitHub Actions
+      |
+      v
+OIDC / Workload Identity Federation
+      |
+      v
+Google Cloud
+      |
+      +--> Artifact Registry
+      |
+      +--> GKE
+      |
+      +--> Secret Manager
+      |
+      +--> Cloud SQL
+```
+
+No long-lived Google Cloud service-account JSON key is required by the deployment pipeline.
+
+---
+
+## Security Model
+
+AgentABI includes:
+
+- GitHub OAuth2 login
+- Signed AgentABI JWTs
+- Organization/project RBAC
+- Tenant-scoped authorization
+- Webhook HMAC-SHA256 verification
+- Redis rate limiting
+- Request-size controls
+- CORS and security headers
+- Correlation IDs
+- Append-only audit events
+- Secret storage outside source control
+- Automated Gitleaks scanning
+- Trivy filesystem/IaC scanning
+
+Cross-tenant resources intentionally return `404` rather than revealing that another tenant's resource exists.
+
+See [`docs/SECURITY_VERIFICATION.md`](docs/SECURITY_VERIFICATION.md).
+
+---
+
+## Observability
+
+AgentABI supports:
+
+- structured JSON logging
+- OpenTelemetry distributed tracing
+- Prometheus application metrics
+- Grafana dashboards
+- API and worker instrumentation
+
+Tracing can be disabled independently of metrics.
+
+---
+
+## Local Development
+
+Create the environment:
 
 ```bash
 cp .env.example .env
-make install       # creates backend/.venv and installs deps
-make infra-up       # postgres, redis, neo4j, kafka via docker compose
-make migrate         # alembic upgrade head
-make run             # uvicorn app.main:app --reload
+make install
+make infra-up
+make migrate
+make run
 ```
 
+Backend quality checks:
+
 ```bash
-make fmt         # ruff format + fix
-make lint         # ruff check
-make typecheck   # mypy
-make test          # pytest
+make fmt
+make lint
+make typecheck
+make test
 ```
 
-`make test` needs a `python3.12` on your PATH (that's what `make venv`
-builds `backend/.venv` from). If your machine's default Python is a
-different version (e.g. 3.13) and you don't have 3.12 installed
-separately, run the suite in Docker instead — a real Python 3.12
-container with the same `[dev]` dependencies CI installs, built from a
-dedicated `test` stage that never ships in the `api`/`worker` production
-image:
+A Docker-based Python 3.12 test path is also available:
 
 ```bash
-make infra-up            # postgres, neo4j (test depends on both)
+make infra-up
 docker compose run --rm test
 ```
 
-`GET /api/v1/health` reports process liveness. `GET /api/v1/ready` reports
-whether Postgres is actually reachable (503 if not).
+---
 
-## Frontend
+## Frontend Development
 
 ```bash
 cp frontend/.env.example frontend/.env.local
-make frontend        # npm install && npm run dev, or cd frontend && npm run dev
+cd frontend
+npm install
+npm run dev
 ```
 
-Standalone Next.js app in `frontend/`, independently runnable from the
-backend — see docs/ARCHITECTURE.md's Phase 14 section for structure,
-auth flow, and the API-client/TanStack Query boundary. GitHub OAuth
-requires setting the backend's `github_oauth_redirect_uri` to the
-frontend's own `/auth/callback` route (see docs/DECISIONS.md ADR-070).
+Validation:
 
-## Tracing
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
 
-Distributed tracing (OpenTelemetry) is off by default
-(`OTEL_ENABLED=false`) and never required for normal operation. To try
-it locally: `docker compose up -d otel-collector`, set
-`OTEL_ENABLED=true` for the API/worker, and watch collector stdout for
-spans. See docs/ARCHITECTURE.md's Phase 15 section.
+---
 
-## Metrics
+## Health Endpoints
 
-Prometheus metrics are on by default (`METRICS_ENABLED=true`), exposed
-at `GET /metrics` (no AgentABI JWT — meant for a local/internal-network
-scraper; see docs/ARCHITECTURE.md's Phase 16 section for the documented
-security boundary). Separate from tracing: `prometheus_client` owns
-metrics directly, never through OpenTelemetry (ADR-073). Run `docker
-compose up -d prometheus grafana` to try it locally — Prometheus at
-`http://localhost:9090` (targets: `api:8000`, `worker:9101`), Grafana at
-`http://localhost:3001` (`admin` / `GRAFANA_ADMIN_PASSWORD`, default a
-local-only placeholder) with the "AgentABI — System Overview" dashboard
-auto-provisioned.
+Process health:
 
-## Security & API
+```text
+GET /api/v1/health
+```
 
-Access to non-public APIs requires an AgentABI JWT obtained via GitHub
-OAuth2 (`/api/v1/auth/github/login`); authorization is RBAC
-(OWNER/ADMIN/MEMBER) reloaded from the database per request and scoped to
-organizations/projects (tenant isolation — cross-tenant access returns 404,
-not 403). APIs are Pydantic-validated, Redis-rate-limited, and return a
-standardized JSON error envelope. Inbound GitHub webhooks are verified via
-HMAC-SHA256 (`X-Hub-Signature-256`) rather than a JWT, and admin actions are
-recorded in an append-only audit log. Swagger UI is at `/docs` (Authorize
-with a Bearer JWT); a Postman collection is in `postman/` — see
-`docs/POSTMAN.md`. Full design in `docs/ARCHITECTURE.md`'s Security
-Architecture Overview and `docs/SECURITY_VERIFICATION.md`.
+Dependency readiness:
+
+```text
+GET /api/v1/ready
+```
+
+The readiness endpoint verifies required runtime dependencies such as PostgreSQL, Neo4j, and Kafka.
+
+---
+
+## API Documentation
+
+When running locally, FastAPI Swagger documentation is available at:
+
+```text
+/docs
+```
+
+A Postman collection and usage instructions are available in:
+
+```text
+postman/
+docs/POSTMAN.md
+```
+
+---
+
+## Repository Structure
+
+```text
+AgentABI/
+├── backend/                  FastAPI application and deterministic engines
+├── frontend/                 Next.js web application
+├── deploy/helm/agentabi/     Kubernetes Helm chart
+├── infra/terraform/          AWS infrastructure
+├── infra/terraform/gcp/      GCP recruiter-demo infrastructure
+├── docs/                     Architecture, ADRs, security and runbooks
+├── scripts/                  Operational demo scripts
+├── postman/                  API collection and environment
+├── .github/workflows/        CI/CD pipelines
+└── docker-compose.yml        Local infrastructure
+```
+
+---
+
+## Engineering Documentation
+
+Detailed design information is available in:
+
+- [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/DECISIONS.md`](docs/DECISIONS.md)
+- [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- [`docs/SECURITY_VERIFICATION.md`](docs/SECURITY_VERIFICATION.md)
+- [`docs/INTERVIEW_NOTES.md`](docs/INTERVIEW_NOTES.md)
+- [`docs/POSTMAN.md`](docs/POSTMAN.md)
+
+---
+
+## Design Invariant
+
+AgentABI's most important architectural boundary is:
+
+```text
+Deterministic analysis
+    -> produces evidence
+    -> calculates risk
+    -> decides PASS/WARN/BLOCK
+
+LLM
+    -> receives structured evidence
+    -> explains the result
+```
+
+The language model does **not** calculate compatibility, dependency edges, replay metrics, risk scores, or deployment decisions.
+
+That separation keeps the safety decision reproducible, testable, and independent of the explanation model.
