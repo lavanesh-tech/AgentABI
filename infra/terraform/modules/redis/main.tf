@@ -6,7 +6,7 @@ resource "aws_elasticache_subnet_group" "this" {
 
 resource "aws_security_group" "redis" {
   name_prefix = "${var.name_prefix}-cache-"
-  description = "AgentABI ElastiCache — ingress only from the EKS cluster's node/pod security group. Never publicly reachable."
+  description = "AgentABI ElastiCache - ingress only from the EKS cluster node/pod security group. Never publicly reachable."
   vpc_id      = var.vpc_id
   tags        = merge(var.tags, { Name = "${var.name_prefix}-cache" })
 
@@ -16,10 +16,10 @@ resource "aws_security_group" "redis" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "redis_from_eks" {
-  for_each = toset(var.allowed_security_group_ids)
+  count = length(var.allowed_security_group_ids)
 
   security_group_id            = aws_security_group.redis.id
-  referenced_security_group_id = each.value
+  referenced_security_group_id = var.allowed_security_group_ids[count.index]
   from_port                    = 6379
   to_port                      = 6379
   ip_protocol                  = "tcp"
@@ -49,7 +49,7 @@ resource "aws_elasticache_replication_group" "this" {
   at_rest_encryption_enabled = true
   transit_encryption_enabled = true
   # one(...[*]...), not ...[0]..., so this stays valid even when the data
-  # source has count = 0 (enable_auth_token = false) — see the pattern
+  # source has count = 0 (enable_auth_token = false) - see the pattern
   # note in modules/dns/main.tf.
   auth_token = one(data.aws_secretsmanager_secret_version.auth_token[*].secret_string)
 

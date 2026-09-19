@@ -1,7 +1,7 @@
 # Private RDS PostgreSQL. Credentials are never generated or stored by
 # Terraform: manage_master_user_password = true delegates master password
 # creation/rotation entirely to RDS + Secrets Manager (AWS-managed secret,
-# created and populated outside Terraform's own state/plan diff) — this is
+# created and populated outside Terraform's own state/plan diff) - this is
 # the current AWS-recommended mechanism and the only way this module can
 # honestly claim "no credentials in Terraform state."
 
@@ -20,7 +20,7 @@ resource "aws_db_subnet_group" "this" {
 
 resource "aws_security_group" "rds" {
   name_prefix = "${var.name_prefix}-rds-"
-  description = "AgentABI RDS Postgres — ingress only from the EKS cluster's node/pod security group."
+  description = "AgentABI RDS Postgres - ingress only from the EKS cluster node/pod security group."
   vpc_id      = var.vpc_id
   tags        = merge(var.tags, { Name = "${var.name_prefix}-rds" })
 
@@ -30,10 +30,10 @@ resource "aws_security_group" "rds" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "rds_from_eks" {
-  for_each = toset(var.allowed_security_group_ids)
+  count = length(var.allowed_security_group_ids)
 
   security_group_id            = aws_security_group.rds.id
-  referenced_security_group_id = each.value
+  referenced_security_group_id = var.allowed_security_group_ids[count.index]
   from_port                    = 5432
   to_port                      = 5432
   ip_protocol                  = "tcp"

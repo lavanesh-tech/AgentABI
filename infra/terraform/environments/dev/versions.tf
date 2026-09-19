@@ -29,11 +29,11 @@ terraform {
   #      names from that bootstrap's outputs.
   #   3. Run `terraform init -migrate-state`.
   #
-  # backend "s3" {
-  #   bucket         = "REPLACE-WITH-BOOTSTRAP-OUTPUT-bucket_name"
-  #   key            = "agentabi/dev/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   dynamodb_table = "REPLACE-WITH-BOOTSTRAP-OUTPUT-lock_table_name"
-  #   encrypt        = true
-  # }
+  backend "s3" {
+    bucket       = "agentabi-terraform-state-719429929317"
+    key          = "agentabi/dev/terraform.tfstate"
+    region       = "us-east-1"
+    use_lockfile = true
+    encrypt      = true
+  }
 }

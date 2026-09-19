@@ -3,7 +3,7 @@ name: agentabi
 description: >-
   AgentABI (Agent Compatibility & Upgrade Intelligence Platform) —
   Kubernetes deployment for the on-demand recruiter demo EKS environment.
-  Deploys the API, worker, frontend, and Neo4j. Postgres, Redis, and MSK
+  Deploys the API, worker, frontend, and Neo4j. Postgres and Redis, with Kafka running inside EKS
   are AWS-managed (RDS / ElastiCache / MSK, provisioned by Terraform —
   see infra/terraform) and are not deployed by this chart.
 type: application

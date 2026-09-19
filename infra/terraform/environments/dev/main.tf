@@ -54,8 +54,17 @@ module "iam" {
   oidc_provider_arn = module.eks.oidc_provider_arn
   oidc_provider_url = module.eks.oidc_provider_url
 
-  ecr_repository_arns         = values(module.ecr.repository_arns)
-  secrets_manager_secret_arns = values(module.secrets.secret_arns)
+  ecr_repository_arns = values(module.ecr.repository_arns)
+
+  secrets_manager_secret_arns = concat(
+    values(module.secrets.secret_arns),
+    [module.rds.master_user_secret_arn],
+  )
+
+  app_namespace             = "agentabi"
+  app_service_account_names = ["agentabi"]
+
+  kms_decrypt_key_arns = [module.rds.kms_key_arn]
 
   enable_external_dns_role = module.dns.enabled
   hosted_zone_arn          = module.dns.hosted_zone_arn
@@ -69,7 +78,7 @@ module "rds" {
   name_prefix                = local.name_prefix
   vpc_id                     = module.networking.vpc_id
   private_data_subnet_ids    = module.networking.private_data_subnet_ids
-  allowed_security_group_ids = [module.eks.additional_security_group_id]
+  allowed_security_group_ids = [module.eks.cluster_security_group_id]
 
   instance_class       = var.rds_instance_class
   allocated_storage_gb = var.rds_allocated_storage_gb
@@ -86,7 +95,7 @@ module "redis" {
   name_prefix                = local.name_prefix
   vpc_id                     = module.networking.vpc_id
   private_data_subnet_ids    = module.networking.private_data_subnet_ids
-  allowed_security_group_ids = [module.eks.additional_security_group_id]
+  allowed_security_group_ids = [module.eks.cluster_security_group_id]
 
   engine                     = var.redis_engine
   node_type                  = var.redis_node_type
@@ -95,18 +104,6 @@ module "redis" {
   tags = local.common_tags
 }
 
-module "msk" {
-  source = "../../modules/msk"
-
-  name_prefix                = local.name_prefix
-  vpc_id                     = module.networking.vpc_id
-  private_data_subnet_ids    = module.networking.private_data_subnet_ids
-  allowed_security_group_ids = [module.eks.additional_security_group_id]
-
-  deployment_mode = var.msk_deployment_mode
-
-  tags = local.common_tags
-}
 
 module "dns" {
   source = "../../modules/dns"

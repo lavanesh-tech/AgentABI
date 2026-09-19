@@ -16,7 +16,6 @@ rds_instance_class     = "db.t4g.micro"
 rds_multi_az           = false
 rds_skip_final_snapshot = true # false to preserve demo data across destroy/recreate
 redis_node_type        = "cache.t4g.micro"
-msk_deployment_mode     = "serverless"
 
 
 # Leave unset to skip Route53/ACM entirely:
@@ -29,7 +28,6 @@ msk_deployment_mode     = "serverless"
 # rds_skip_final_snapshot          = false
 # rds_deletion_protection          = true
 # redis_automatic_failover_enabled = true
-# msk_deployment_mode               = "provisioned"
 
 # Secure default: EKS API is private-only.
 # If temporary public API access is required, enable it explicitly and

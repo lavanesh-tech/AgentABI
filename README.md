@@ -198,16 +198,16 @@ This keeps the platform auditable and avoids using an LLM as the source of truth
 
 ### Cloud and DevOps
 
-- Google Cloud Platform
-- Google Kubernetes Engine Autopilot
-- Cloud SQL for PostgreSQL
-- Artifact Registry
-- Secret Manager
+- Amazon Web Services (AWS)
+- Amazon Elastic Kubernetes Service (EKS)
+- Amazon RDS for PostgreSQL
+- Amazon Elastic Container Registry (ECR)
+- AWS Secrets Manager
 - Terraform
 - Helm
 - Docker
 - GitHub Actions
-- Workload Identity Federation
+- GitHub Actions OIDC and IAM Roles for Service Accounts (IRSA)
 
 ### Observability
 
@@ -219,50 +219,23 @@ This keeps the platform auditable and avoids using an LLM as the source of truth
 
 ---
 
-## GCP Recruiter Demo
+## AWS Recruiter Demo
 
-AgentABI includes an on-demand GCP deployment designed for demonstrations without keeping infrastructure running continuously.
+AgentABI runs on AWS using Amazon EKS, Amazon RDS for PostgreSQL, Amazon ElastiCache for Valkey, Amazon ECR, AWS Secrets Manager, Apache Kafka, Neo4j, the API, worker, and Next.js frontend.
 
-The demo environment includes:
+### Start / Restore the Demo
 
-- GKE Autopilot
-- Cloud SQL PostgreSQL
-- Redis
-- Kafka
-- Neo4j
-- API
-- background worker
-- Next.js frontend
-- Secret Manager-backed runtime configuration
-
-### Start the Demo
-
-```bash
-./scripts/gcp-demo-up.sh
-```
-
-The script:
-
-1. starts Cloud SQL
-2. provisions the GKE environment
-3. restores runtime secrets
-4. deploys the Helm release
-5. waits for workloads to become ready
-6. verifies the public readiness endpoint
+    ./scripts/aws-demo-up.sh
 
 ### Check Status
 
-```bash
-./scripts/gcp-demo-status.sh
-```
+    ./scripts/aws-demo-status.sh
 
-### Shut Down the Demo
+### Pause Demo Workloads
 
-```bash
-./scripts/gcp-demo-down.sh --yes
-```
+    ./scripts/aws-demo-down.sh --yes
 
-The environment is intentionally disposable so it can be shut down when not needed.
+The down script scales Kubernetes workloads to zero while preserving persistent data and provisioned AWS infrastructure. AWS resources may continue to incur charges.
 
 ---
 
@@ -286,7 +259,7 @@ The pipeline includes:
 - dependency vulnerability scanning
 - infrastructure misconfiguration scanning
 
-GCP deployment uses **Workload Identity Federation** instead of long-lived Google Cloud service-account keys.
+AWS deployment uses **GitHub Actions OIDC** to assume a scoped IAM deploy role instead of storing long-lived AWS access keys in GitHub.
 
 ---
 
@@ -305,8 +278,8 @@ AgentABI includes multiple security controls:
 - security headers
 - correlation IDs
 - audit logging
-- Secret Manager integration
-- private Cloud SQL networking
+- AWS Secrets Manager integration
+- private Amazon RDS networking
 - CI secret scanning
 - dependency vulnerability scanning
 - infrastructure security checks
@@ -377,7 +350,9 @@ AgentABI/
 │   └── helm/
 ├── infra/
 │   └── terraform/
-│       ├── gcp/
+│       ├── bootstrap/
+│       ├── environments/
+│       │   └── dev/
 │       └── modules/
 ├── observability/
 ├── scripts/
@@ -439,6 +414,6 @@ The project is structured as an engineering platform rather than a simple chatbo
 
 ## Status
 
-Core platform functionality, security hardening, CI validation, frontend integration, and the on-demand GCP deployment workflow are implemented.
+Core platform functionality, security hardening, CI validation, frontend integration, and the AWS EKS deployment workflow are implemented.
 
 The cloud demo is kept offline when not in use and can be started for demonstrations using the provided lifecycle scripts.

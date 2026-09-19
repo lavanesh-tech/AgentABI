@@ -34,12 +34,12 @@ variable "single_nat_gateway" {
 
 variable "eks_cluster_version" {
   type    = string
-  default = "1.30"
+  default = "1.36"
 }
 
 variable "eks_node_instance_types" {
   type    = list(string)
-  default = ["t3.medium"]
+  default = ["c7i-flex.large"]
 }
 
 variable "eks_node_capacity_type" {
@@ -115,11 +115,6 @@ variable "redis_automatic_failover_enabled" {
   default = false
 }
 
-variable "msk_deployment_mode" {
-  description = "\"serverless\" (default, cost-conscious) or \"provisioned\" (production-style, continuous broker cost)."
-  type        = string
-  default     = "serverless"
-}
 
 variable "domain_name" {
   description = "Leave empty to skip Route53/ACM — the deployment is fully valid and usable without a custom domain."

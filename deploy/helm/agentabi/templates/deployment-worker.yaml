@@ -19,7 +19,7 @@ spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
       containers:
         - name: worker
-          image: {{ include "agentabi.image" (dict "registry" .Values.image.registry "repository" "agentabi-api" "tag" .Values.image.tag) }}
+          image: {{ include "agentabi.image" (dict "registry" .Values.image.registry "repository" "agentabi-api" "tag" .Values.image.tag) | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # Same image as the API (docker-compose.yml's own convention —
           # see ADR history in docs/DECISIONS.md), different command:
@@ -52,6 +52,17 @@ spec:
             periodSeconds: 15
           resources:
             {{- toYaml .Values.resources.worker | nindent 12 }}
+          volumeMounts:
+            - name: csi-secrets
+              mountPath: /mnt/secrets-store
+              readOnly: true
+      volumes:
+        - name: csi-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: agentabi-secrets
 ---
 apiVersion: v1
 kind: Service
