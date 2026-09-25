@@ -15,7 +15,7 @@ dependencies = [
     "alembic>=1.13,<1.14",
     "asyncpg>=0.29,<0.30",
     "psycopg[binary]>=3.2,<3.3",
-    "httpx>=0.27,<0.28",
+    "httpx>=0.28.1,<0.29",
     "redis>=5.1,<6.0",
     "neo4j>=5.24,<6.0",
     "structlog>=24.4,<25.0",
@@ -39,7 +39,7 @@ dev = [
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.24,<0.25",
     "pytest-cov>=6.0,<7.0",
-    "httpx>=0.27,<0.28",
+    "httpx>=0.28.1,<0.29",
 ]
 
 [build-system]
